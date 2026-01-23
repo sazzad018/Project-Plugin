@@ -2,9 +2,9 @@
 <?php
 // Database Configuration
 $servername = "localhost";
-$username = "root";      // আপনার ডাটাবেস ইউজারনেম দিন
-$password = "";          // আপনার ডাটাবেস পাসওয়ার্ড দিন
-$dbname = "ecommerce_db"; // আপনার ডাটাবেসের নাম দিন
+$username = "sociala1_test";      // আপনার ডাটাবেস ইউজারনেম দিন
+$password = "sociala1_test";          // আপনার ডাটাবেস পাসওয়ার্ড দিন
+$dbname = "sociala1_test"; // আপনার ডাটাবেসের নাম দিন
 
 // Create connection
 $conn = new mysqli($servername, $username, $password, $dbname);

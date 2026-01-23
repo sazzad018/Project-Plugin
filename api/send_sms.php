@@ -10,9 +10,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
-// Include Database Connection
-include 'db.php';
-
 // Get JSON input from the dashboard
 $input = json_decode(file_get_contents("php://input"), true);
 
@@ -29,33 +26,10 @@ $msg = isset($input['msg']) ? $input['msg'] : '';
 $contacts = isset($input['contacts']) ? $input['contacts'] : '';
 $type = isset($input['type']) ? $input['type'] : 'text'; // Default to text
 
-// --- SMART LOOKUP: If Credentials missing, fetch from Database ---
-// This allows the WP Plugin to send requests without knowing the API Key
-if ((empty($api_key) || empty($senderid)) && isset($conn)) {
-    $sql = "SELECT setting_value FROM settings WHERE setting_key = 'sms_config' LIMIT 1";
-    $result = $conn->query($sql);
-    
-    if ($result && $result->num_rows > 0) {
-        $row = $result->fetch_assoc();
-        $config = json_decode($row['setting_value'], true);
-        
-        if (json_last_error() === JSON_ERROR_NONE && is_array($config)) {
-            // Prioritize config from DB if input is empty
-            if (empty($api_key) && !empty($config['apiKey'])) {
-                $api_key = $config['apiKey'];
-            }
-            if (empty($senderid) && !empty($config['senderId'])) {
-                $senderid = $config['senderId'];
-            }
-        }
-    }
-}
-// -------------------------------------------------------------
-
 // Validation
 if (empty($api_key) || empty($senderid) || empty($contacts) || empty($msg)) {
     http_response_code(400);
-    echo json_encode(["success" => false, "message" => "Missing configuration. Please save SMS Settings in Dashboard or provide api_key/senderid."]);
+    echo json_encode(["success" => false, "message" => "Missing required fields (api_key, senderid, contacts, msg)"]);
     exit;
 }
 
@@ -84,12 +58,11 @@ curl_close($ch);
 if ($err) {
     echo json_encode(["success" => false, "message" => "cURL Error: " . $err]);
 } else {
-    // Return success response to the dashboard/plugin
-    // We check if the provider response contains success indicators if possible, 
-    // but usually returning the raw provider response is enough.
+    // Return success response to the dashboard
+    // We attach the provider's raw response for debugging/confirmation
     echo json_encode([
         "success" => true, 
-        "message" => "Request processed via Dashboard Proxy", 
+        "message" => "Request processed", 
         "provider_response" => $response
     ]);
 }

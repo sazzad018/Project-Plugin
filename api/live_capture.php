@@ -15,11 +15,7 @@ include 'db.php';
 $featCheck = $conn->query("SELECT is_enabled FROM feature_flags WHERE feature_key = 'live_capture'");
 if ($featCheck && $featCheck->num_rows > 0) {
     $isEnabled = (bool)$featCheck->fetch_assoc()['is_enabled'];
-    // Allow 'delete' action even if disabled temporarily to clean up
-    $input_data = json_decode(file_get_contents("php://input"), true);
-    $action = isset($input_data['action']) ? $input_data['action'] : '';
-    
-    if (!$isEnabled && $action !== 'delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!$isEnabled && $_SERVER['REQUEST_METHOD'] === 'POST') {
         echo json_encode(["success" => false, "message" => "Feature disabled"]);
         exit;
     }
@@ -27,27 +23,9 @@ if ($featCheck && $featCheck->num_rows > 0) {
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $data = json_decode(file_get_contents("php://input"), true);
-    $action = isset($data['action']) ? $data['action'] : 'capture';
-    $phone = isset($data['phone']) ? $conn->real_escape_string($data['phone']) : '';
-
-    // DELETE LOGIC: Triggered when order is successfully placed
-    if ($action === 'delete') {
-        if ($phone) {
-            // Delete lead associated with this phone as it is now a real order
-            $sql = "DELETE FROM incomplete_orders WHERE phone = '$phone'";
-            if ($conn->query($sql)) {
-                echo json_encode(["success" => true, "message" => "Lead converted and removed"]);
-            } else {
-                echo json_encode(["success" => false, "error" => $conn->error]);
-            }
-        } else {
-            echo json_encode(["success" => false, "message" => "Phone required for deletion"]);
-        }
-        exit;
-    }
     
-    // CAPTURE LOGIC: Triggered while typing
     $session_id = isset($data['session_id']) ? $conn->real_escape_string($data['session_id']) : '';
+    $phone = isset($data['phone']) ? $conn->real_escape_string($data['phone']) : '';
     
     // Only save if phone is present (core requirement)
     if ($session_id && $phone) {

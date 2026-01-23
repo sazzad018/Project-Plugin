@@ -38,12 +38,9 @@ function bkash_call($url, $method, $data, $headers) {
         curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
     }
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // For live server compatibility
-    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-    curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3');
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     
     $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $err = curl_error($ch);
     curl_close($ch);
     
@@ -51,14 +48,7 @@ function bkash_call($url, $method, $data, $headers) {
         return ["status" => "error", "message" => "cURL Error: $err"];
     }
     
-    $decoded = json_decode($response, true);
-    
-    // Attach HTTP code for debugging if authentication fails
-    if ($httpCode >= 400 && is_array($decoded)) {
-        $decoded['http_code'] = $httpCode;
-    }
-    
-    return $decoded;
+    return json_decode($response, true);
 }
 
 $action = isset($_GET['action']) ? $_GET['action'] : '';
@@ -66,41 +56,25 @@ $config = getSetting($conn, 'bkash_config');
 
 if (!$config) {
     ob_clean();
-    echo json_encode(["status" => "error", "message" => "bKash configuration not found in database."]);
+    echo json_encode(["status" => "error", "message" => "bKash not configured"]);
     exit;
 }
 
-// Determine Base URL
-// Strict check for boolean true or string "true"
+// Determine Base URL (Robust check for string 'true' or boolean true)
 $isSandbox = isset($config['isSandbox']) && ($config['isSandbox'] === true || $config['isSandbox'] === "true");
 $base_url = $isSandbox ? "https://tokenized.sandbox.bka.sh/v1.2.0-beta" : "https://tokenized.pay.bka.sh/v1.2.0-beta";
 
 // 1. Get Token (Used internally)
 function getToken($config, $base_url) {
-    $username = trim($config['username'] ?? '');
-    $password = trim($config['password'] ?? '');
-    $appKey = trim($config['appKey'] ?? '');
-    $appSecret = trim($config['appSecret'] ?? '');
-    
-    if (empty($appKey) || empty($appSecret) || empty($username) || empty($password)) {
-        return ["status" => "error", "message" => "Missing one or more credentials (Username, Password, AppKey, AppSecret) in settings."];
-    }
-
-    // DOCS COMPLIANCE: Grant Token headers ONLY need username and password.
-    // x-app-key should NOT be here for Grant Token.
     $headers = [
         "Content-Type: application/json",
-        "username: " . $username,
-        "password: " . $password
+        "username: " . trim($config['username']),
+        "password: " . trim($config['password']),
+        "x-app-key: " . trim($config['appKey']) // Added x-app-key header which is required by some gateways
     ];
-    
-    $data = json_encode([
-        "app_key" => $appKey, 
-        "app_secret" => $appSecret
-    ]);
+    $data = json_encode(["app_key" => trim($config['appKey']), "app_secret" => trim($config['appSecret'])]);
     
     $res = bkash_call("$base_url/token/grant", "POST", $data, $headers);
-    
     return $res;
 }
 
@@ -109,30 +83,26 @@ ob_clean(); // Ensure clean output
 if ($action === 'create') {
     // Input: amount, sms_count
     $input = json_decode(file_get_contents("php://input"), true);
-    $amount = isset($input['amount']) ? $input['amount'] : 0;
-    $sms_qty = isset($input['sms_qty']) ? $input['sms_qty'] : 0;
+    $amount = $input['amount'];
+    $sms_qty = $input['sms_qty']; // We pass this to track how much to add
 
-    // Step 1: Get Token
     $tokenRes = getToken($config, $base_url);
-    
     if (isset($tokenRes['id_token'])) {
         $token = $tokenRes['id_token'];
     } else {
-        // Detailed Error Response from Gateway
-        $errMsg = "Unknown Auth Error";
-        if (isset($tokenRes['statusMessage'])) $errMsg = $tokenRes['statusMessage'];
-        if (isset($tokenRes['message'])) $errMsg = $tokenRes['message'];
+        // Return detailed error with URL for debugging
+        $errMsg = isset($tokenRes['statusMessage']) ? $tokenRes['statusMessage'] : json_encode($tokenRes);
+        if (isset($tokenRes['message'])) $errMsg = $tokenRes['message']; // Catch gateway errors
         
         echo json_encode([
             "status" => "error", 
-            "message" => "Auth Failed: $errMsg",
-            "full_response" => $tokenRes
+            "message" => "Auth failed at $base_url: " . $errMsg
         ]);
         exit;
     }
 
-    // Step 2: Create Payment
     // Embed SMS Qty in invoice number: INV_{Timestamp}_{SMSQty}
+    // Example: INV_1723456789_500
     $invoice_no = "INV_" . time() . "_" . $sms_qty;
     
     // Detect Protocol and Host for Callback
@@ -149,7 +119,6 @@ if ($action === 'create') {
         "merchantInvoiceNumber" => $invoice_no
     ]);
 
-    // DOCS COMPLIANCE: Create Payment headers NEED Authorization and x-app-key
     $headers = [
         "Content-Type: application/json",
         "Authorization: " . $token,
@@ -161,8 +130,7 @@ if ($action === 'create') {
     if (isset($res['bkashURL'])) {
         echo json_encode(["status" => "success", "bkashURL" => $res['bkashURL']]);
     } else {
-        $msg = isset($res['statusMessage']) ? $res['statusMessage'] : (isset($res['message']) ? $res['message'] : json_encode($res));
-        echo json_encode(["status" => "error", "message" => "Create failed: " . $msg]);
+        echo json_encode(["status" => "error", "message" => "Create failed: " . (isset($res['statusMessage']) ? $res['statusMessage'] : json_encode($res))]);
     }
 
 } elseif ($action === 'callback') {
@@ -172,14 +140,14 @@ if ($action === 'create') {
 
     // Redirect Base (The React App URL)
     $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off' || $_SERVER['SERVER_PORT'] == 443) ? "https://" : "http://";
+    // Assuming the React app is at root / 
     $app_url = $protocol . $_SERVER['HTTP_HOST'] . dirname(dirname($_SERVER['PHP_SELF'])); 
 
     if ($status !== 'success') {
-        header("Location: $app_url/?payment_status=failed&msg=User Cancelled or Failed");
+        header("Location: $app_url/?payment_status=failed");
         exit;
     }
 
-    // Step 1: Get Token (Again, stateless)
     $tokenRes = getToken($config, $base_url);
     if (isset($tokenRes['id_token'])) {
         $token = $tokenRes['id_token'];
@@ -188,10 +156,7 @@ if ($action === 'create') {
         exit;
     }
 
-    // Step 2: Execute Payment
     $execute_data = json_encode(["paymentID" => $paymentID]);
-    
-    // DOCS COMPLIANCE: Execute Payment headers NEED Authorization and x-app-key
     $headers = [
         "Content-Type: application/json",
         "Authorization: " . $token,
@@ -213,17 +178,21 @@ if ($action === 'create') {
 
         // UPDATE DATABASE
         if ($sms_to_add > 0) {
+            // Get current balance
             $bal_res = $conn->query("SELECT balance FROM sms_balance_store ORDER BY id DESC LIMIT 1");
             $current_bal = 0;
-            if ($bal_res && $bal_res->num_rows > 0) {
+            if ($bal_res->num_rows > 0) {
                 $current_bal = (int)$bal_res->fetch_assoc()['balance'];
             }
             
             $new_bal = $current_bal + $sms_to_add;
             
+            // Insert new record or update
+            // We'll update the latest record to keep it simple, or insert new log
+            $target_id = 1; 
             $check_sql = "SELECT id FROM sms_balance_store ORDER BY id DESC LIMIT 1";
             $c_res = $conn->query($check_sql);
-            if($c_res && $c_res->num_rows > 0) {
+            if($c_res->num_rows > 0) {
                 $target_id = $c_res->fetch_assoc()['id'];
                 $conn->query("UPDATE sms_balance_store SET balance = $new_bal WHERE id = $target_id");
             } else {
@@ -233,7 +202,7 @@ if ($action === 'create') {
 
         header("Location: $app_url/?payment_status=success&added=$sms_to_add");
     } else {
-        $err = isset($res['errorMessage']) ? $res['errorMessage'] : (isset($res['message']) ? $res['message'] : 'Unknown Error');
+        $err = isset($res['errorMessage']) ? $res['errorMessage'] : 'Unknown Error';
         header("Location: $app_url/?payment_status=failed&msg=" . urlencode($err));
     }
 } else {

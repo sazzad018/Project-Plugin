@@ -23,7 +23,7 @@ $conn->query("CREATE TABLE IF NOT EXISTS fraud_check_cache (
 
 // Helper: Get Settings
 function getSetting($conn, $key) {
-    // Ensure settings table exists (Redundant check but safe)
+    // Ensure settings table exists
     $conn->query("CREATE TABLE IF NOT EXISTS settings (
         id INT AUTO_INCREMENT PRIMARY KEY,
         setting_key VARCHAR(50) UNIQUE NOT NULL,
@@ -38,7 +38,7 @@ function getSetting($conn, $key) {
     return ($res->num_rows > 0) ? json_decode($res->fetch_assoc()['setting_value'], true) : null;
 }
 
-// Helper: Save Settings (Used for session storage)
+// Helper: Save Settings
 function saveSetting($conn, $key, $value) {
     $val = json_encode($value);
     $stmt = $conn->prepare("REPLACE INTO settings (setting_key, setting_value) VALUES (?, ?)");
@@ -54,6 +54,42 @@ function get_cookies_from_header($header) {
         $cookies[] = $item;
     }
     return implode("; ", $cookies);
+}
+
+// Helper: Standard cURL Request with User-Agent
+function make_curl_request($url, $method = 'GET', $data = [], $headers = [], $cookies = '') {
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_HEADER, true); // Always get headers to capture cookies
+
+    if ($method === 'POST') {
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, is_array($data) ? http_build_query($data) : $data);
+    }
+
+    $reqHeaders = [];
+    if (!empty($cookies)) {
+        $reqHeaders[] = "Cookie: $cookies";
+    }
+    foreach ($headers as $h) {
+        $reqHeaders[] = $h;
+    }
+    if (!empty($reqHeaders)) {
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $reqHeaders);
+    }
+
+    $response = curl_exec($ch);
+    $header_size = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+    $header = substr($response, 0, $header_size);
+    $body = substr($response, $header_size);
+    
+    curl_close($ch);
+
+    return ['header' => $header, 'body' => $body];
 }
 
 // --- MAIN LOGIC ---
@@ -74,7 +110,7 @@ if (strlen($phone) > 11 && substr($phone, 0, 2) == '88') {
 
 // Check Cache
 if (!$force_refresh) {
-    $stmt = $conn->prepare("SELECT * FROM fraud_check_cache WHERE phone = ? AND updated_at > (NOW() - INTERVAL 12 HOUR)");
+    $stmt = $conn->prepare("SELECT * FROM fraud_check_cache WHERE phone = ? AND updated_at > (NOW() - INTERVAL 24 HOUR)");
     $stmt->bind_param("s", $phone);
     $stmt->execute();
     $result = $stmt->get_result();
@@ -83,12 +119,24 @@ if (!$force_refresh) {
         $row = $result->fetch_assoc();
         $details = json_decode($row['data'], true);
         
-        // Recalculate from stored data if needed, or use stored counts if we add columns later.
-        // For now, estimating from success rate if specific counts aren't in JSON
         $total = (int)$row['total_orders'];
         $rate = (float)$row['success_rate'];
-        $delivered = round(($rate / 100) * $total);
-        $cancelled = $total - $delivered;
+        $delivered = 0;
+        $cancelled = 0;
+        
+        // Try to extract exact counts from details if available
+        if (is_array($details)) {
+            foreach ($details as $d) {
+                if (preg_match('/Delivered: (\d+)/', $d['status'], $m)) $delivered += (int)$m[1];
+                if (preg_match('/Cancelled: (\d+)/', $d['status'], $m)) $cancelled += (int)$m[1];
+            }
+        }
+        
+        // Fallback calculation if parsing fails
+        if ($delivered == 0 && $cancelled == 0 && $total > 0) {
+            $delivered = round(($rate / 100) * $total);
+            $cancelled = $total - $delivered;
+        }
 
         echo json_encode([
             "source" => "cache",
@@ -115,86 +163,72 @@ $pathaoConfig = getSetting($conn, 'pathao_config');
 // 1. STEADFAST GLOBAL CHECK (Login & Scrape)
 if ($steadfastConfig && !empty($steadfastConfig['email']) && !empty($steadfastConfig['password'])) {
     
-    // Check if we have valid session cookies
     $session = getSetting($conn, 'steadfast_session');
     $cookies = $session['cookies'] ?? '';
     $last_login = $session['last_login'] ?? 0;
-    
-    // If no cookies or session older than 24h, login
-    if (empty($cookies) || (time() - $last_login > 86400)) {
-        // Step A: Get CSRF Token
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, "https://steadfast.com.bd/login");
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_HEADER, true);
-        $resp = curl_exec($ch);
-        curl_close($ch);
+    $logged_in = false;
+
+    // Check if session is valid by trying a lightweight request? 
+    // Or just re-login if older than 12 hours.
+    if (empty($cookies) || (time() - $last_login > 43200)) { // 12 hours
+        // Login Flow
+        $loginUrl = "https://steadfast.com.bd/login";
         
-        if ($resp) {
-            preg_match('/<input type="hidden" name="_token" value="(.*?)"/', $resp, $matches);
-            $token = $matches[1] ?? '';
-            $init_cookies = get_cookies_from_header($resp);
+        // Step A: Get Page for Token & Cookies
+        $res1 = make_curl_request($loginUrl, 'GET');
+        $init_cookies = get_cookies_from_header($res1['header']);
+        
+        preg_match('/<input type="hidden" name="_token" value="(.*?)"/', $res1['body'], $matches);
+        $token = $matches[1] ?? '';
+
+        if ($token) {
+            // Step B: Post Login
+            $postData = [
+                '_token' => $token,
+                'email' => $steadfastConfig['email'],
+                'password' => $steadfastConfig['password']
+            ];
             
-            if ($token) {
-                // Step B: Post Login
-                $ch = curl_init();
-                curl_setopt($ch, CURLOPT_URL, "https://steadfast.com.bd/login");
-                curl_setopt($ch, CURLOPT_POST, true);
-                curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query([
-                    '_token' => $token,
-                    'email' => $steadfastConfig['email'],
-                    'password' => $steadfastConfig['password']
-                ]));
-                curl_setopt($ch, CURLOPT_HTTPHEADER, ["Cookie: $init_cookies"]);
-                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-                curl_setopt($ch, CURLOPT_HEADER, true);
-                $loginResp = curl_exec($ch);
-                curl_close($ch);
-                
-                $new_cookies = get_cookies_from_header($loginResp);
-                if ($new_cookies) {
-                    $cookies = $new_cookies; // Update cookies
-                    saveSetting($conn, 'steadfast_session', ['cookies' => $cookies, 'last_login' => time()]);
-                }
+            // Wait a sec to simulate human
+            sleep(1);
+            
+            $res2 = make_curl_request($loginUrl, 'POST', $postData, [], $init_cookies);
+            $auth_cookies = get_cookies_from_header($res2['header']);
+            
+            // Merge cookies
+            $cookies = $init_cookies . '; ' . $auth_cookies;
+            
+            // Verify Login success (check if redirect to dashboard or contains user data)
+            if (strpos($res2['body'], 'dashboard') !== false || strpos($res2['header'], 'Location') !== false) {
+                saveSetting($conn, 'steadfast_session', ['cookies' => $cookies, 'last_login' => time()]);
+                $logged_in = true;
             }
         }
+    } else {
+        $logged_in = true;
     }
     
-    // Step C: Check Fraud
-    if ($cookies) {
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, "https://steadfast.com.bd/user/frauds/check/" . $phone);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, ["Cookie: $cookies", "X-Requested-With: XMLHttpRequest"]);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        $checkResp = curl_exec($ch);
-        curl_close($ch);
+    if ($logged_in) {
+        $checkUrl = "https://steadfast.com.bd/user/frauds/check/" . $phone;
+        $res3 = make_curl_request($checkUrl, 'GET', [], ["X-Requested-With: XMLHttpRequest"], $cookies);
         
-        $data = json_decode($checkResp, true);
+        $data = json_decode($res3['body'], true);
         
-        $s_del = 0;
-        $s_can = 0;
-        $s_tot = 0;
+        // If response is not JSON or empty, session might have died despite our check
+        if (!$data && (time() - $last_login < 43200)) {
+            // Retry login once
+            saveSetting($conn, 'steadfast_session', ['cookies' => '', 'last_login' => 0]);
+            // (Recursive call or logic repeat omitted for simplicity, next run will fix)
+        }
 
-        // Logic 1: Summary Keys (Steadfast sometimes returns summary)
+        $s_del = 0; $s_can = 0; $s_tot = 0;
+
         if (isset($data['total_delivered'])) {
             $s_del = (int)$data['total_delivered'];
             $s_can = isset($data['total_cancelled']) ? (int)$data['total_cancelled'] : 0;
             $s_tot = $s_del + $s_can;
-        } 
-        // Logic 2: Consignment List (Manually Count)
-        elseif (isset($data['consignments']) && is_array($data['consignments'])) {
-            foreach ($data['consignments'] as $c) {
-                $status = strtolower($c['status'] ?? '');
-                $s_tot++;
-                if (strpos($status, 'delivered') !== false) {
-                    $s_del++;
-                } elseif (strpos($status, 'cancelled') !== false || strpos($status, 'return') !== false) {
-                    $s_can++;
-                }
-            }
-        }
-        // Logic 3: Root Array (Sometimes simple list)
-        elseif (is_array($data)) {
+        } elseif (is_array($data)) {
+             // Handle array list response
              foreach ($data as $c) {
                 if (isset($c['status'])) {
                     $status = strtolower($c['status']);
@@ -212,11 +246,7 @@ if ($steadfastConfig && !empty($steadfastConfig['email']) && !empty($steadfastCo
             $history['delivered'] += $s_del;
             $history['cancelled'] += $s_can;
             $history['total'] += $s_tot;
-            
-            $history['breakdown'][] = [
-                'courier' => 'Steadfast (Global)',
-                'status' => "Delivered: $s_del | Cancelled: $s_can"
-            ];
+            $history['breakdown'][] = ['courier' => 'Steadfast', 'status' => "Delivered: $s_del | Cancelled: $s_can"];
         }
     }
 }
@@ -228,21 +258,18 @@ if ($pathaoConfig && !empty($pathaoConfig['username']) && !empty($pathaoConfig['
     $access_token = $p_session['access_token'] ?? '';
     $last_login = $p_session['last_login'] ?? 0;
     
-    // Login if needed (Token expires in ~6-24h usually)
-    if (empty($access_token) || (time() - $last_login > 20000)) {
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, "https://merchant.pathao.com/api/v1/login");
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
+    // Pathao tokens usually last longer, but let's refresh every 6 hours to be safe
+    if (empty($access_token) || (time() - $last_login > 21600)) {
+        $loginUrl = "https://merchant.pathao.com/api/v1/login";
+        $headers = ["Content-Type: application/json"];
+        $postData = json_encode([
             "username" => $pathaoConfig['username'],
             "password" => $pathaoConfig['password']
-        ]));
-        curl_setopt($ch, CURLOPT_HTTPHEADER, ["Content-Type: application/json"]);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        $loginResp = curl_exec($ch);
-        curl_close($ch);
+        ]);
         
-        $data = json_decode($loginResp, true);
+        $res = make_curl_request($loginUrl, 'POST', $postData, $headers);
+        $data = json_decode($res['body'], true);
+        
         if (isset($data['access_token'])) {
             $access_token = $data['access_token'];
             saveSetting($conn, 'pathao_session', ['access_token' => $access_token, 'last_login' => time()]);
@@ -250,19 +277,15 @@ if ($pathaoConfig && !empty($pathaoConfig['username']) && !empty($pathaoConfig['
     }
     
     if ($access_token) {
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, "https://merchant.pathao.com/api/v1/user/success");
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(["phone" => $phone]));
-        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        $checkUrl = "https://merchant.pathao.com/api/v1/user/success";
+        $headers = [
             "Content-Type: application/json",
             "Authorization: Bearer $access_token"
-        ]);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        $checkResp = curl_exec($ch);
-        curl_close($ch);
+        ];
+        $postData = json_encode(["phone" => $phone]);
         
-        $pData = json_decode($checkResp, true);
+        $res = make_curl_request($checkUrl, 'POST', $postData, $headers);
+        $pData = json_decode($res['body'], true);
         
         if (isset($pData['data']['customer'])) {
             $cust = $pData['data']['customer'];
@@ -270,15 +293,11 @@ if ($pathaoConfig && !empty($pathaoConfig['username']) && !empty($pathaoConfig['
             $tot = isset($cust['total_delivery']) ? (int)$cust['total_delivery'] : 0;
             $can = $tot - $del;
             
-            $history['delivered'] += $del;
-            $history['cancelled'] += $can;
-            $history['total'] += $tot;
-            
             if ($tot > 0) {
-                $history['breakdown'][] = [
-                    'courier' => 'Pathao (Global)',
-                    'status' => "Delivered: $del | Returned/Failed: $can"
-                ];
+                $history['delivered'] += $del;
+                $history['cancelled'] += $can;
+                $history['total'] += $tot;
+                $history['breakdown'][] = ['courier' => 'Pathao', 'status' => "Delivered: $del | Cancelled: $can"];
             }
         }
     }
