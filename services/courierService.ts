@@ -1,13 +1,14 @@
 
-import { CourierConfig, Order } from "../types";
+import { CourierConfig, Order, RedxConfig } from "../types";
 import { getPathaoOrderStatus, mapPathaoEventToStatus } from "./pathaoService";
 
 const PROXY_URL = "api/courier.php";
 const TRACKING_URL = "api/local_tracking.php";
 const SETTINGS_URL = "api/settings.php";
 
-export const identifyCourierByTrackingCode = (trackingCode: string): 'Steadfast' | 'Pathao' => {
+export const identifyCourierByTrackingCode = (trackingCode: string): 'Steadfast' | 'Pathao' | 'RedX' => {
   if (!trackingCode) return 'Steadfast';
+  if (trackingCode.startsWith('RX')) return 'RedX';
   return /^\d+$/.test(trackingCode) ? 'Pathao' : 'Steadfast';
 };
 
@@ -32,7 +33,7 @@ const fetchSetting = async (key: string) => {
     const res = await fetch(`${SETTINGS_URL}?key=${key}`);
     if (!res.ok) return null;
     const text = await res.text();
-    if (!text || text === "null") return null;
+    if (!text || text === "null" || text.trim() === "") return null;
     try {
       const data = JSON.parse(text);
       return typeof data === 'string' ? JSON.parse(data) : data;
@@ -64,6 +65,14 @@ export const saveCourierConfig = async (config: CourierConfig) => {
   await saveSetting('courier_config', config);
 };
 
+export const getRedxConfig = async (): Promise<RedxConfig | null> => {
+  return await fetchSetting('redx_config');
+};
+
+export const saveRedxConfig = async (config: RedxConfig) => {
+  await saveSetting('redx_config', config);
+};
+
 export const fetchAllLocalTracking = async (): Promise<any[]> => {
   try {
     const res = await fetch(TRACKING_URL);
@@ -80,7 +89,7 @@ export const fetchAllLocalTracking = async (): Promise<any[]> => {
   }
 };
 
-export const saveTrackingLocally = async (orderId: string, trackingCode: string, status: string, courier?: 'Steadfast' | 'Pathao') => {
+export const saveTrackingLocally = async (orderId: string, trackingCode: string, status: string, courier?: 'Steadfast' | 'Pathao' | 'RedX') => {
   const detectedCourier = courier || identifyCourierByTrackingCode(trackingCode);
   try {
     const response = await fetch(TRACKING_URL, {
@@ -185,8 +194,7 @@ export const syncOrderStatusWithCourier = async (orders: Order[]) => {
       if (courierStatus) {
         if (courier === 'Pathao') {
           currentStatus = mapPathaoEventToStatus(courierStatus);
-        } else {
-          // Default Steadfast mapping (polling or webhook)
+        } else if (courier === 'Steadfast') {
           currentStatus = mapSteadfastStatusToInternal(courierStatus);
         }
       }
@@ -194,7 +202,7 @@ export const syncOrderStatusWithCourier = async (orders: Order[]) => {
       updatedOrders[i] = {
         ...updatedOrders[i],
         status: currentStatus,
-        courier_name: courier as 'Steadfast' | 'Pathao',
+        courier_name: courier as 'Steadfast' | 'Pathao' | 'RedX',
         courier_tracking_code: trackingInfo.courier_tracking_code,
         courier_status: courierStatus
       };

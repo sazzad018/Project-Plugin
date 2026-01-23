@@ -64,7 +64,7 @@ export interface Order {
   statusHistory: OrderStatusHistory;
   courier_tracking_code?: string;
   courier_status?: string;
-  courier_name?: 'Steadfast' | 'Pathao';
+  courier_name?: 'Steadfast' | 'Pathao' | 'RedX';
 }
 
 export interface Expense {
@@ -102,6 +102,10 @@ export interface PathaoConfig {
   storeId: string;
   isSandbox: boolean;
   webhookSecret?: string;
+}
+
+export interface RedxConfig {
+  accessToken: string;
 }
 
 export interface SMSAutomationStatus {

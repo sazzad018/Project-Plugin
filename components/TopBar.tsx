@@ -2,19 +2,20 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Bell, Globe, RefreshCcw, Calendar, ChevronDown, LayoutGrid, Settings, X, Truck, Copy, Check, Download, AlertCircle, Lock, MessageSquare } from 'lucide-react';
 import { getWPConfig, saveWPConfig, WPConfig } from '../services/wordpressService';
-import { getCourierConfig, saveCourierConfig } from '../services/courierService';
+import { getCourierConfig, saveCourierConfig, getRedxConfig, saveRedxConfig } from '../services/courierService';
 import { getPathaoConfig, savePathaoConfig } from '../services/pathaoService';
 import { getBkashConfig, saveBkashConfig, BkashConfig, getSMSConfig, saveSMSConfig, SMSConfig } from '../services/smsService';
-import { CourierConfig, PathaoConfig } from '../types';
+import { CourierConfig, PathaoConfig, RedxConfig } from '../types';
 
 export const TopBar: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
-  const [activeTab, setActiveTab] = useState<'wp' | 'courier' | 'pathao' | 'bkash' | 'sms'>('wp');
+  const [activeTab, setActiveTab] = useState<'wp' | 'courier' | 'pathao' | 'redx' | 'bkash' | 'sms'>('wp');
   const [config, setConfig] = useState<WPConfig>({ url: '', consumerKey: '', consumerSecret: '' });
   const [courierConfig, setCourierConfig] = useState<CourierConfig>({ apiKey: '', secretKey: '', email: '', password: '' });
   const [pathaoConfig, setPathaoConfig] = useState<PathaoConfig>({
     clientId: '', clientSecret: '', username: '', password: '', storeId: '', isSandbox: true, webhookSecret: ''
   });
+  const [redxConfig, setRedxConfig] = useState<RedxConfig>({ accessToken: '' });
   const [bkashConfig, setBkashConfig] = useState<BkashConfig>({
     appKey: '', appSecret: '', username: '', password: '', isSandbox: false
   });
@@ -33,6 +34,8 @@ export const TopBar: React.FC = () => {
       if (savedCourier) setCourierConfig(savedCourier);
       const savedPathao = await getPathaoConfig();
       if (savedPathao) setPathaoConfig(savedPathao);
+      const savedRedx = await getRedxConfig();
+      if (savedRedx) setRedxConfig(savedRedx);
       const savedBkash = await getBkashConfig();
       if (savedBkash) setBkashConfig(savedBkash);
       const savedSms = await getSMSConfig();
@@ -50,6 +53,8 @@ export const TopBar: React.FC = () => {
       await saveCourierConfig(courierConfig);
     } else if (activeTab === 'pathao') {
       await savePathaoConfig(pathaoConfig);
+    } else if (activeTab === 'redx') {
+      await saveRedxConfig(redxConfig);
     } else if (activeTab === 'bkash') {
       await saveBkashConfig(bkashConfig);
     } else if (activeTab === 'sms') {
@@ -158,6 +163,12 @@ export const TopBar: React.FC = () => {
                 className={`flex-1 py-3 text-[10px] font-bold uppercase whitespace-nowrap px-4 transition-colors ${activeTab === 'pathao' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-400'}`}
               >
                 Pathao
+              </button>
+              <button 
+                onClick={() => setActiveTab('redx')}
+                className={`flex-1 py-3 text-[10px] font-bold uppercase whitespace-nowrap px-4 transition-colors ${activeTab === 'redx' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-400'}`}
+              >
+                RedX
               </button>
               <button 
                 onClick={() => setActiveTab('sms')}
@@ -392,6 +403,25 @@ export const TopBar: React.FC = () => {
                     <label htmlFor="sandbox" className="text-xs font-medium text-gray-600">Use Sandbox (Testing)</label>
                   </div>
                 </>
+              )}
+
+              {activeTab === 'redx' && (
+                <div className="space-y-4 animate-in fade-in">
+                    <div className="bg-red-50 p-3 rounded-lg border border-red-100 mb-2 flex items-center gap-3 text-red-700">
+                        <Truck size={18} />
+                        <p className="text-[10px]">Configure RedX integration. Used for fetching delivery history in fraud checks.</p>
+                    </div>
+                    <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-gray-400 uppercase">Access Token (Bearer)</label>
+                        <input 
+                          type="password" 
+                          value={redxConfig.accessToken} 
+                          onChange={e => setRedxConfig({...redxConfig, accessToken: e.target.value})} 
+                          className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" 
+                          placeholder="Your RedX Access Token" 
+                        />
+                    </div>
+                </div>
               )}
 
               {activeTab === 'sms' && (
