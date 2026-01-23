@@ -1,4 +1,3 @@
-
 <?php 
 // Allow access to variables from render_dashboard
 $is_connected = isset($is_connected) ? $is_connected : false;
@@ -14,6 +13,8 @@ function is_feature_active($key, $features) {
 $local_fraud_phone_enabled = get_option('bdc_fraud_phone_validation');
 $local_fraud_history_enabled = get_option('bdc_fraud_history_check');
 $local_min_rate = get_option('bdc_fraud_min_rate', 50);
+$local_disable_cod = get_option('bdc_fraud_disable_cod');
+$local_enable_otp = get_option('bdc_fraud_enable_otp');
 ?>
 
 <!-- Custom Dashboard Styles -->
@@ -225,6 +226,24 @@ $local_min_rate = get_option('bdc_fraud_min_rate', 50);
     }
     .status-ok { background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
     .status-err { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+    
+    /* New Checkbox Styling */
+    .bdc-check-group {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        padding: 15px;
+        border-radius: 8px;
+        margin-top: 10px;
+    }
+    .bdc-check-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 0;
+        border-bottom: 1px dashed #e2e8f0;
+    }
+    .bdc-check-row:last-child { border-bottom: none; }
+    .bdc-check-label { font-size: 13px; font-weight: 600; color: #475569; }
 </style>
 
 <div class="bdc-dashboard">
@@ -400,7 +419,7 @@ $local_min_rate = get_option('bdc_fraud_min_rate', 50);
                         <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 15px;">
                             <div>
                                 <h3 style="margin:0 0 5px; font-size:16px;">Delivery Success Rate Check</h3>
-                                <p style="color:#64748b; font-size:13px; margin:0;">Restrict orders if delivery success rate is below minimum percentage.</p>
+                                <p style="color:#64748b; font-size:13px; margin:0;">Analyze customer history. If success rate is below threshold, trigger actions.</p>
                             </div>
                             <label class="bdc-switch">
                                 <input type="checkbox" name="bdc_fraud_history_check" value="1" <?php checked( 1, $local_fraud_history_enabled, true ); ?>>
@@ -408,13 +427,31 @@ $local_min_rate = get_option('bdc_fraud_min_rate', 50);
                             </label>
                         </div>
                         
-                        <div class="bdc-range-wrap" style="background:#f8fafc; padding:15px; border-radius:8px; border:1px solid #e2e8f0;">
+                        <!-- NEW OPTIONS -->
+                        <div class="bdc-check-group">
+                            <div class="bdc-check-row">
+                                <span class="bdc-check-label">Disable Cash on Delivery (COD) for Low Success Rate?</span>
+                                <label class="bdc-switch">
+                                    <input type="checkbox" name="bdc_fraud_disable_cod" value="1" <?php checked( 1, $local_disable_cod, true ); ?>>
+                                    <span class="bdc-slider"></span>
+                                </label>
+                            </div>
+                            <div class="bdc-check-row">
+                                <span class="bdc-check-label">Enable OTP Verification for Low Success Rate?</span>
+                                <label class="bdc-switch">
+                                    <input type="checkbox" name="bdc_fraud_enable_otp" value="1" <?php checked( 1, $local_enable_otp, true ); ?>>
+                                    <span class="bdc-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="bdc-range-wrap" style="background:#f8fafc; padding:15px; border-radius:8px; border:1px solid #e2e8f0; margin-top:15px;">
                             <label class="bdc-label" style="display:flex; justify-content:space-between;">
-                                Minimum Success Rate Required:
+                                Minimum Success Rate Threshold:
                                 <span class="bdc-range-val"><span id="rate-display"><?php echo esc_attr($local_min_rate); ?></span>%</span>
                             </label>
                             <input type="range" class="bdc-range" name="bdc_fraud_min_rate" min="0" max="100" value="<?php echo esc_attr($local_min_rate); ?>" oninput="document.getElementById('rate-display').textContent = this.value">
-                            <p style="font-size:11px; color:#94a3b8; margin-top:5px; font-style:italic;">Note: This check calls the external API during checkout. Customers with no history will be allowed.</p>
+                            <p style="font-size:11px; color:#94a3b8; margin-top:5px; font-style:italic;">Note: If customer's success rate is BELOW this %, the selected actions (Disable COD / OTP) will trigger.</p>
                         </div>
                     </div>
 

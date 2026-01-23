@@ -3,7 +3,7 @@
  * Plugin Name: BdCommerce SMS Manager
  * Plugin URI:  https://bdcommerce.com
  * Description: A complete SMS & Customer Management solution. Sync customers and send Bulk SMS by relaying requests through your Main Dashboard. Includes Live Capture & Fraud Check in Orders.
- * Version:     1.9.6
+ * Version:     2.1.0
  * Author:      BdCommerce
  * License:     GPL2
  */
@@ -36,6 +36,12 @@ class BDC_SMS_Manager {
         // AJAX Handlers
         add_action( 'wp_ajax_bdc_sync_customers', array( $this, 'ajax_sync_customers' ) );
         add_action( 'wp_ajax_bdc_send_sms', array( $this, 'ajax_send_sms' ) );
+        
+        // OTP AJAX
+        add_action( 'wp_ajax_bdc_send_otp', array( $this, 'ajax_send_otp' ) );
+        add_action( 'wp_ajax_nopriv_bdc_send_otp', array( $this, 'ajax_send_otp' ) );
+        add_action( 'wp_ajax_bdc_verify_otp', array( $this, 'ajax_verify_otp' ) );
+        add_action( 'wp_ajax_nopriv_bdc_verify_otp', array( $this, 'ajax_verify_otp' ) );
 
         // Live Capture Injection
         add_action( 'wp_footer', array( $this, 'inject_live_capture_script' ) );
@@ -50,7 +56,7 @@ class BDC_SMS_Manager {
         add_filter( 'manage_woocommerce_page_wc-orders_columns', array( $this, 'add_fraud_check_column' ) );
         add_action( 'manage_woocommerce_page_wc-orders_custom_column', array( $this, 'render_fraud_check_column_hpos' ), 10, 2 );
 
-        // FRAUD GUARD: Checkout Validation Hook (Consolidated)
+        // Checkout Validation (Server Side Backup)
         add_action( 'woocommerce_checkout_process', array( $this, 'execute_fraud_guard_checks' ) );
     }
 
@@ -103,10 +109,12 @@ class BDC_SMS_Manager {
         register_setting( 'bdc_fraud_group', 'bdc_fraud_phone_validation' ); // 11 Digit Check
         register_setting( 'bdc_fraud_group', 'bdc_fraud_history_check' ); // Enable History Check
         register_setting( 'bdc_fraud_group', 'bdc_fraud_min_rate' ); // Min % Threshold
+        register_setting( 'bdc_fraud_group', 'bdc_fraud_disable_cod' ); // Disable COD for high risk
+        register_setting( 'bdc_fraud_group', 'bdc_fraud_enable_otp' ); // Enable OTP for high risk
     }
 
     /**
-     * FRAUD GUARD: Execute All Checks
+     * FRAUD GUARD: Server Side Validation
      */
     public function execute_fraud_guard_checks() {
         $billing_phone = isset( $_POST['billing_phone'] ) ? $_POST['billing_phone'] : '';
@@ -115,18 +123,22 @@ class BDC_SMS_Manager {
         // 1. Validate 11-Digit Length
         if ( get_option( 'bdc_fraud_phone_validation' ) ) {
             if ( strlen( $clean_phone ) < 11 ) {
-                wc_add_notice( __( '<strong>Fraud Guard:</strong> Please enter a valid 11-digit mobile number.', 'bdc-sms' ), 'error' );
-                return; // Stop here if length is invalid
+                wc_add_notice( __( '<strong>Mobile Number Error:</strong> Please enter a valid 11-digit mobile number.', 'bdc-sms' ), 'error' );
+                return;
             }
         }
 
-        // 2. Validate Delivery History Success Rate
+        // If verified by OTP on frontend, skip backend check
+        if ( isset($_POST['bdc_otp_verified']) && $_POST['bdc_otp_verified'] === 'true' ) {
+            return;
+        }
+
+        // 2. Validate Delivery History & Payment Method
         if ( get_option( 'bdc_fraud_history_check' ) ) {
             $api_base = $this->get_api_base_url();
             if ( ! $api_base ) return;
 
-            // Call Dashboard API to check history
-            $response = wp_remote_get( $api_base . '/check_fraud.php?phone=' . $clean_phone, array( 'timeout' => 3 ) );
+            $response = wp_remote_get( $api_base . '/check_fraud.php?phone=' . $clean_phone, array( 'timeout' => 15, 'sslverify' => false ) );
 
             if ( ! is_wp_error( $response ) && wp_remote_retrieve_response_code( $response ) === 200 ) {
                 $body = wp_remote_retrieve_body( $response );
@@ -135,11 +147,21 @@ class BDC_SMS_Manager {
                 if ( isset( $data['success_rate'] ) && isset( $data['total_orders'] ) ) {
                     $total_orders = intval( $data['total_orders'] );
                     $success_rate = floatval( $data['success_rate'] );
-                    $min_rate = intval( get_option( 'bdc_fraud_min_rate', 50 ) ); // Default 50%
+                    $min_rate = intval( get_option( 'bdc_fraud_min_rate', 50 ) );
 
-                    // Only block if they have history (total_orders > 0) AND rate is below threshold
                     if ( $total_orders > 0 && $success_rate < $min_rate ) {
-                        wc_add_notice( sprintf( __( '<strong>Order Restricted:</strong> Based on delivery history, your account does not meet the minimum success rate of %d%% (Your Rate: %d%%). Please contact support or pay in advance.', 'bdc-sms' ), $min_rate, intval($success_rate) ), 'error' );
+                        // Check COD Restriction
+                        if ( get_option('bdc_fraud_disable_cod') ) {
+                            $payment_method = isset($_POST['payment_method']) ? $_POST['payment_method'] : '';
+                            if ( $payment_method === 'cod' ) {
+                                wc_add_notice( __( '<strong>Order Restricted:</strong> Due to delivery history, Cash on Delivery is unavailable. Please select an online payment method.', 'bdc-sms' ), 'error' );
+                            }
+                        }
+                        
+                        // OTP check is mainly frontend, but if enabled and not verified, block here as fallback
+                        if ( get_option('bdc_fraud_enable_otp') && (!isset($_POST['bdc_otp_verified']) || $_POST['bdc_otp_verified'] !== 'true') ) {
+                             wc_add_notice( __( '<strong>Verification Required:</strong> Please complete the SMS verification to place this order.', 'bdc-sms' ), 'error' );
+                        }
                     }
                 }
             }
@@ -147,12 +169,298 @@ class BDC_SMS_Manager {
     }
 
     /**
+     * AJAX: Send OTP
+     */
+    public function ajax_send_otp() {
+        $phone = isset($_POST['phone']) ? sanitize_text_field($_POST['phone']) : '';
+        if(!$phone) wp_send_json_error("Phone number required");
+
+        $otp = rand(1000, 9999);
+        
+        // Store in Session
+        if ( !WC()->session ) WC()->session = new WC_Session_Handler();
+        WC()->session->set( 'bdc_otp_code', $otp );
+        WC()->session->set( 'bdc_otp_phone', $phone );
+
+        $message = "Your verification code is: " . $otp;
+        $api_base = $this->get_api_base_url();
+        
+        if(!$api_base) wp_send_json_error("SMS API not configured");
+
+        $formatted_phone = $phone;
+        if ( strlen( $formatted_phone ) == 11 && substr( $formatted_phone, 0, 2 ) == '01' ) $formatted_phone = '88' . $formatted_phone;
+
+        // Send SMS
+        wp_remote_post( $api_base . '/send_sms.php', array(
+            'body' => json_encode(array("contacts" => $formatted_phone, "msg" => $message, "type" => 'text')),
+            'headers' => array('Content-Type' => 'application/json'),
+            'timeout' => 15, 'sslverify' => false
+        ));
+
+        wp_send_json_success("OTP Sent");
+    }
+
+    /**
+     * AJAX: Verify OTP
+     */
+    public function ajax_verify_otp() {
+        $code = isset($_POST['code']) ? sanitize_text_field($_POST['code']) : '';
+        $phone = isset($_POST['phone']) ? sanitize_text_field($_POST['phone']) : '';
+
+        if ( !WC()->session ) WC()->session = new WC_Session_Handler();
+        $stored_otp = WC()->session->get( 'bdc_otp_code' );
+        $stored_phone = WC()->session->get( 'bdc_otp_phone' );
+
+        if( $stored_otp && $code == $stored_otp && $phone == $stored_phone ) {
+            wp_send_json_success("Verified");
+        } else {
+            wp_send_json_error("Invalid Code");
+        }
+    }
+
+    /**
      * Enqueue Scripts and Styles
      */
     public function enqueue_assets( $hook ) {
+        // Enqueue Front-end Checkout Script
+        if ( is_checkout() ) {
+            $api_base = $this->get_api_base_url();
+            if($api_base) {
+                $check_history = get_option('bdc_fraud_history_check') ? 'yes' : 'no';
+                $disable_cod = get_option('bdc_fraud_disable_cod') ? 'yes' : 'no';
+                $enable_otp = get_option('bdc_fraud_enable_otp') ? 'yes' : 'no';
+                $min_rate = get_option('bdc_fraud_min_rate', 50);
+
+                wp_enqueue_script('jquery');
+                
+                // Add Inline OTP CSS
+                $custom_css = "
+                    .bdc-otp-wrapper {
+                        background: #f8fafc;
+                        border: 1px solid #e2e8f0;
+                        border-radius: 6px;
+                        padding: 15px;
+                        margin-top: 10px;
+                        margin-bottom: 10px;
+                        display: none;
+                        animation: fadeIn 0.3s ease;
+                    }
+                    .bdc-otp-msg {
+                        font-size: 13px;
+                        color: #dc2626;
+                        margin-bottom: 10px;
+                        font-weight: 600;
+                        display: flex;
+                        align-items: center;
+                        gap: 5px;
+                    }
+                    .bdc-otp-row { display: flex; gap: 10px; }
+                    .bdc-otp-input { 
+                        flex: 1; 
+                        padding: 8px; 
+                        text-align: center; 
+                        letter-spacing: 2px; 
+                        border: 1px solid #cbd5e1; 
+                        border-radius: 4px;
+                    }
+                    .bdc-btn-otp {
+                        background: #ea580c;
+                        color: white;
+                        border: none;
+                        padding: 8px 15px;
+                        border-radius: 4px;
+                        font-size: 12px;
+                        cursor: pointer;
+                        font-weight: 600;
+                    }
+                    .bdc-btn-otp:hover { background: #c2410c; }
+                    .bdc-btn-otp:disabled { opacity: 0.7; cursor: not-allowed; }
+                    .bdc-verified-badge {
+                        background: #dcfce7;
+                        color: #166534;
+                        padding: 8px;
+                        border-radius: 6px;
+                        text-align: center;
+                        font-weight: bold;
+                        border: 1px solid #bbf7d0;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        gap: 6px;
+                        margin-top: 5px;
+                    }
+                    @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+                ";
+                wp_add_inline_style('woocommerce-general', $custom_css);
+
+                // Add Checkout JS
+                wp_add_inline_script('jquery', '
+                    jQuery(document).ready(function($) {
+                        var fraudConfig = {
+                            check: "'.$check_history.'",
+                            disableCod: "'.$disable_cod.'",
+                            enableOtp: "'.$enable_otp.'",
+                            minRate: '.$min_rate.',
+                            apiUrl: "'.esc_url($api_base . '/check_fraud.php').'"
+                        };
+                        var isOtpVerified = false;
+                        var checkedPhones = {};
+                        var lastCheckedPhone = "";
+
+                        // Inject Hidden verified field
+                        $("form.checkout").append("<input type=\"hidden\" name=\"bdc_otp_verified\" id=\"bdc_otp_verified\" value=\"false\">");
+
+                        // Monitor Phone Field
+                        $("#billing_phone").on("change blur", function() {
+                            var phone = $(this).val().replace(/[^0-9]/g, "");
+                            
+                            // Reset verification if number changes
+                            if(lastCheckedPhone && lastCheckedPhone !== phone) {
+                                isOtpVerified = false;
+                                $("#bdc_otp_verified").val("false");
+                                $("#bdc-inline-otp").remove();
+                                $("form.checkout button[type=\"submit\"]").prop("disabled", false);
+                            }
+
+                            if(phone.length >= 11 && fraudConfig.check === "yes") {
+                                lastCheckedPhone = phone;
+                                checkFraudStatus(phone);
+                            }
+                        });
+
+                        function checkFraudStatus(phone) {
+                            if(checkedPhones[phone]) {
+                                handleRisk(checkedPhones[phone], phone);
+                                return;
+                            }
+
+                            // Show loading indicator? Maybe not to disturb UI too much
+                            
+                            $.ajax({
+                                url: fraudConfig.apiUrl,
+                                data: { phone: phone },
+                                dataType: "json",
+                                success: function(data) {
+                                    var status = "safe";
+                                    if(data.success_rate && data.total_orders > 0 && parseFloat(data.success_rate) < fraudConfig.minRate) {
+                                        status = "risk";
+                                    }
+                                    checkedPhones[phone] = status;
+                                    handleRisk(status, phone);
+                                }
+                            });
+                        }
+
+                        function handleRisk(status, phone) {
+                            // Clear previous
+                            $("#bdc-inline-otp").remove();
+
+                            if(status === "risk" && fraudConfig.enableOtp === "yes") {
+                                // Inject OTP Field
+                                var otpHtml = `
+                                    <div id="bdc-inline-otp" class="bdc-otp-wrapper">
+                                        <div class="bdc-otp-msg">
+                                            <span class="dashicons dashicons-warning"></span>
+                                            Delivery History Check Failed. Verification Required.
+                                        </div>
+                                        <div id="bdc-otp-step-1">
+                                            <p style="font-size:11px; margin-bottom:5px; color:#64748b;">We need to verify your phone number to proceed with this order.</p>
+                                            <button type="button" id="bdc-send-btn" class="bdc-btn-otp" style="width:100%;">Send OTP via SMS</button>
+                                        </div>
+                                        <div id="bdc-otp-step-2" style="display:none;">
+                                            <p style="font-size:11px; margin-bottom:5px; color:#64748b;">Enter code sent to ` + phone + `</p>
+                                            <div class="bdc-otp-row">
+                                                <input type="text" id="bdc-otp-input" class="bdc-otp-input" placeholder="XXXX" maxlength="4">
+                                                <button type="button" id="bdc-verify-btn" class="bdc-btn-otp">Verify</button>
+                                            </div>
+                                            <div style="margin-top:5px; display:flex; justify-content:space-between;">
+                                                <small id="bdc-otp-error" style="color:red; display:none;">Invalid Code</small>
+                                                <button type="button" id="bdc-resend-link" style="background:none; border:none; color:#2563eb; font-size:10px; cursor:pointer; text-decoration:underline;">Resend?</button>
+                                            </div>
+                                        </div>
+                                        <div id="bdc-otp-step-3" style="display:none;">
+                                            <div class="bdc-verified-badge">
+                                                <span class="dashicons dashicons-yes"></span> Verified Successfully
+                                            </div>
+                                        </div>
+                                    </div>
+                                `;
+                                
+                                $("#billing_phone_field").append(otpHtml);
+                                $("#bdc-inline-otp").show();
+                                
+                                // Disable Place Order until verified
+                                $("form.checkout button[type=\"submit\"]").prop("disabled", true);
+
+                                // Attach Events
+                                $("#bdc-send-btn, #bdc-resend-link").click(function() {
+                                    var btn = $(this);
+                                    btn.text("Sending...");
+                                    $.post("'.admin_url('admin-ajax.php').'", {
+                                        action: "bdc_send_otp",
+                                        phone: phone
+                                    }, function(res) {
+                                        if(res.success) {
+                                            $("#bdc-otp-step-1").hide();
+                                            $("#bdc-otp-step-2").show();
+                                            $("#bdc-otp-input").focus();
+                                        } else {
+                                            alert("Failed to send OTP.");
+                                            btn.text("Send OTP via SMS");
+                                        }
+                                    });
+                                });
+
+                                $("#bdc-verify-btn").click(function() {
+                                    var code = $("#bdc-otp-input").val();
+                                    var btn = $(this);
+                                    btn.text("...");
+                                    
+                                    $.post("'.admin_url('admin-ajax.php').'", {
+                                        action: "bdc_verify_otp",
+                                        code: code,
+                                        phone: phone
+                                    }, function(res) {
+                                        if(res.success) {
+                                            $("#bdc-otp-step-2").hide();
+                                            $("#bdc-otp-step-3").show();
+                                            
+                                            // Unlock Order
+                                            isOtpVerified = true;
+                                            $("#bdc_otp_verified").val("true");
+                                            $("form.checkout button[type=\"submit\"]").prop("disabled", false);
+                                        } else {
+                                            btn.text("Verify");
+                                            $("#bdc-otp-error").show();
+                                        }
+                                    });
+                                });
+                            }
+                        }
+
+                        // Also block submission if risk detected and not verified (double safety)
+                        $("form.checkout").on("checkout_place_order", function() {
+                            var phone = $("#billing_phone").val().replace(/[^0-9]/g, "");
+                            var status = checkedPhones[phone];
+                            
+                            if(status === "risk" && fraudConfig.enableOtp === "yes" && !isOtpVerified) {
+                                $("html, body").animate({
+                                    scrollTop: $("#billing_phone").offset().top - 100
+                                }, 500);
+                                if($("#bdc-inline-otp").length === 0) {
+                                    handleRisk("risk", phone);
+                                }
+                                return false;
+                            }
+                            return true;
+                        });
+                    });
+                ');
+            }
+        }
+
+        // Admin Scripts (Existing)
         $screen = get_current_screen();
-        
-        // Determine if we are on order page (Legacy or HPOS)
         $is_order_page = ( 
             ( $hook === 'edit.php' && isset($_GET['post_type']) && $_GET['post_type'] === 'shop_order' ) || 
             ( $screen && $screen->id === 'woocommerce_page_wc-orders' ) 
@@ -293,6 +601,8 @@ class BDC_SMS_Manager {
 
                 $api_base = $this->get_api_base_url();
                 if($api_base) {
+                    $api_url = esc_url($api_base . '/check_fraud.php');
+                    
                     wp_add_inline_script('jquery', '
                         jQuery(document).ready(function($) {
                             
@@ -300,54 +610,65 @@ class BDC_SMS_Manager {
                                 var phone = container.data("phone");
                                 if(!phone) return;
 
-                                $.get("' . esc_url($api_base . '/check_fraud.php') . '?phone=" + phone, function(data) {
-                                    
-                                    if(data.error) {
-                                        container.html("<span style=\"color:#d63638; font-weight:bold; font-size:11px;\">⚠️ API Error</span>");
-                                        return;
-                                    }
-                                    
-                                    var rate = parseFloat(data.success_rate);
-                                    var rateColor = rate >= 80 ? "#16a34a" : (rate < 50 ? "#dc2626" : "#ca8a04");
-                                    var shieldIcon = rate >= 80 ? "dashicons-shield" : (rate < 50 ? "dashicons-warning" : "dashicons-shield-alt");
+                                console.log("BDC: Checking fraud for " + phone);
 
-                                    var html = "<div class=\"bdc-fraud-result-card\">";
-                                    
-                                    // Top Row
-                                    html += "<div class=\"bdc-fraud-top\">";
-                                    html += "  <div class=\"bdc-rate-group\">";
-                                    html += "    <span class=\"bdc-rate-label\">Success Rate</span>";
-                                    html += "    <span class=\"bdc-rate-val\" style=\"color: " + rateColor + "\"><span class=\"dashicons " + shieldIcon + "\"></span> " + rate + "%</span>";
-                                    html += "  </div>";
-                                    html += "  <div class=\"bdc-total-orders\">" + data.total_orders + " Orders</div>";
-                                    html += "</div>";
-                                    
-                                    // Bottom Row
-                                    html += "<div class=\"bdc-fraud-bottom\">";
-                                    
-                                    // Delivered Box
-                                    html += "  <div class=\"bdc-stat-box delivered\">";
-                                    html += "    <span class=\"bdc-stat-title\">Delivered</span>";
-                                    html += "    <span class=\"bdc-stat-num\">" + data.delivered + "</span>";
-                                    html += "  </div>";
-                                    
-                                    // Cancelled Box
-                                    html += "  <div class=\"bdc-stat-box cancelled\">";
-                                    html += "    <span class=\"bdc-stat-title\">Cancelled</span>";
-                                    html += "    <span class=\"bdc-stat-num\">" + data.cancelled + "</span>";
-                                    html += "  </div>";
-                                    
-                                    html += "</div>"; // End Bottom
-                                    html += "</div>"; // End Card
-                                    
-                                    container.html(html);
-                                }).fail(function() {
-                                    container.html("<button type=\"button\" class=\"button button-small bdc-retry-btn\">Retry</button>");
-                                    container.find(".bdc-retry-btn").click(function(e){
-                                        e.preventDefault();
-                                        container.html("<div class=\"bdc-fraud-loading\"><span class=\"dashicons dashicons-update bdc-spin\"></span> Checking...</div>");
-                                        loadFraudData(container);
-                                    });
+                                $.ajax({
+                                    url: "' . $api_url . '",
+                                    data: { phone: phone },
+                                    dataType: "json",
+                                    timeout: 20000, // 20s timeout for JS as well
+                                    success: function(data) {
+                                        if(data.error) {
+                                            container.html("<span style=\"color:#d63638; font-weight:bold; font-size:11px;\">⚠️ " + data.error + "</span>");
+                                            return;
+                                        }
+                                        
+                                        var rate = parseFloat(data.success_rate);
+                                        var rateColor = rate >= 80 ? "#16a34a" : (rate < 50 ? "#dc2626" : "#ca8a04");
+                                        var shieldIcon = rate >= 80 ? "dashicons-shield" : (rate < 50 ? "dashicons-warning" : "dashicons-shield-alt");
+
+                                        var html = "<div class=\"bdc-fraud-result-card\">";
+                                        
+                                        // Top Row
+                                        html += "<div class=\"bdc-fraud-top\">";
+                                        html += "  <div class=\"bdc-rate-group\">";
+                                        html += "    <span class=\"bdc-rate-label\">Success Rate</span>";
+                                        html += "    <span class=\"bdc-rate-val\" style=\"color: " + rateColor + "\"><span class=\"dashicons " + shieldIcon + "\"></span> " + rate + "%</span>";
+                                        html += "  </div>";
+                                        html += "  <div class=\"bdc-total-orders\">" + data.total_orders + " Orders</div>";
+                                        html += "</div>";
+                                        
+                                        // Bottom Row
+                                        html += "<div class=\"bdc-fraud-bottom\">";
+                                        
+                                        // Delivered Box
+                                        html += "  <div class=\"bdc-stat-box delivered\">";
+                                        html += "    <span class=\"bdc-stat-title\">Delivered</span>";
+                                        html += "    <span class=\"bdc-stat-num\">" + data.delivered + "</span>";
+                                        html += "  </div>";
+                                        
+                                        // Cancelled Box
+                                        html += "  <div class=\"bdc-stat-box cancelled\">";
+                                        html += "    <span class=\"bdc-stat-title\">Cancelled</span>";
+                                        html += "    <span class=\"bdc-stat-num\">" + data.cancelled + "</span>";
+                                        html += "  </div>";
+                                        
+                                        html += "</div>"; // End Bottom
+                                        html += "</div>"; // End Card
+                                        
+                                        container.html(html);
+                                    },
+                                    error: function(xhr, status, error) {
+                                        console.error("BDC Fraud Check Error:", status, error);
+                                        var msg = status === "timeout" ? "Timeout" : "Network Error";
+                                        container.html("<div style=\"display:flex; flex-direction:column; gap:5px;\"><span style=\"color:#d63638; font-size:10px;\">⚠️ " + msg + "</span><button type=\"button\" class=\"button button-small bdc-retry-btn\">Retry</button></div>");
+                                        
+                                        container.find(".bdc-retry-btn").click(function(e){
+                                            e.preventDefault();
+                                            container.html("<div class=\"bdc-fraud-loading\"><span class=\"dashicons dashicons-update bdc-spin\"></span> Retry...</div>");
+                                            loadFraudData(container);
+                                        });
+                                    }
                                 });
                             }
 
@@ -453,7 +774,6 @@ class BDC_SMS_Manager {
         $response = wp_remote_get( $api_base . '/features.php', array( 'timeout' => 5, 'sslverify' => false ) );
         
         if ( is_wp_error( $response ) ) {
-            // If forced refresh fails, fall back to cache if available to avoid breaking UI
             if ( $force_refresh ) {
                 $cached = get_transient('bdc_remote_features');
                 return $cached !== false ? $cached : [];
@@ -495,7 +815,7 @@ class BDC_SMS_Manager {
             )),
             'headers' => array('Content-Type' => 'application/json'),
             'timeout' => 5, 
-            'blocking' => false, // Non-blocking to not slow down order process
+            'blocking' => false, 
             'sslverify' => false
         ));
     }
@@ -640,10 +960,7 @@ class BDC_SMS_Manager {
         global $wpdb;
         $customers = $wpdb->get_results( "SELECT * FROM $this->table_name ORDER BY id DESC" );
         $is_connected = $this->check_connection();
-        
-        // Force refresh features on dashboard load
         $features = $this->get_remote_features( true );
-        
         include(plugin_dir_path(__FILE__) . 'admin-view.php');
     }
 }
