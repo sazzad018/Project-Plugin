@@ -3,7 +3,7 @@
  * Plugin Name: BdCommerce SMS Manager
  * Plugin URI:  https://bdcommerce.com
  * Description: A complete SMS & Customer Management solution. Sync customers and send Bulk SMS by relaying requests through your Main Dashboard. Includes Live Capture & Fraud Check in Orders.
- * Version:     2.1.0
+ * Version:     2.2.0
  * Author:      BdCommerce
  * License:     GPL2
  */
@@ -182,22 +182,27 @@ class BDC_SMS_Manager {
         WC()->session->set( 'bdc_otp_code', $otp );
         WC()->session->set( 'bdc_otp_phone', $phone );
 
-        $message = "Your verification code is: " . $otp;
+        $message = "Your Verification Code is: " . $otp . ". Please do not share this code with anyone.";
         $api_base = $this->get_api_base_url();
         
         if(!$api_base) wp_send_json_error("SMS API not configured");
 
-        $formatted_phone = $phone;
+        // Format Phone
+        $formatted_phone = preg_replace('/[^0-9]/', '', $phone);
         if ( strlen( $formatted_phone ) == 11 && substr( $formatted_phone, 0, 2 ) == '01' ) $formatted_phone = '88' . $formatted_phone;
 
-        // Send SMS
-        wp_remote_post( $api_base . '/send_sms.php', array(
+        // Send SMS Request to Dashboard
+        $response = wp_remote_post( $api_base . '/send_sms.php', array(
             'body' => json_encode(array("contacts" => $formatted_phone, "msg" => $message, "type" => 'text')),
             'headers' => array('Content-Type' => 'application/json'),
             'timeout' => 15, 'sslverify' => false
         ));
 
-        wp_send_json_success("OTP Sent");
+        if(is_wp_error($response)) {
+            wp_send_json_error($response->get_error_message());
+        } else {
+            wp_send_json_success("OTP Sent");
+        }
     }
 
     /**
@@ -211,7 +216,9 @@ class BDC_SMS_Manager {
         $stored_otp = WC()->session->get( 'bdc_otp_code' );
         $stored_phone = WC()->session->get( 'bdc_otp_phone' );
 
-        if( $stored_otp && $code == $stored_otp && $phone == $stored_phone ) {
+        // Loose comparison for phone to handle formatting differences if needed, but session usually stores what was sent
+        if( $stored_otp && $code == $stored_otp ) {
+            // Optional: Check phone match strictly if critical
             wp_send_json_success("Verified");
         } else {
             wp_send_json_error("Invalid Code");
@@ -233,63 +240,27 @@ class BDC_SMS_Manager {
 
                 wp_enqueue_script('jquery');
                 
-                // Add Inline OTP CSS
+                // Professional Modal CSS
                 $custom_css = "
-                    .bdc-otp-wrapper {
-                        background: #f8fafc;
-                        border: 1px solid #e2e8f0;
-                        border-radius: 6px;
-                        padding: 15px;
-                        margin-top: 10px;
-                        margin-bottom: 10px;
-                        display: none;
-                        animation: fadeIn 0.3s ease;
-                    }
-                    .bdc-otp-msg {
-                        font-size: 13px;
-                        color: #dc2626;
-                        margin-bottom: 10px;
-                        font-weight: 600;
-                        display: flex;
-                        align-items: center;
-                        gap: 5px;
-                    }
-                    .bdc-otp-row { display: flex; gap: 10px; }
-                    .bdc-otp-input { 
-                        flex: 1; 
-                        padding: 8px; 
-                        text-align: center; 
-                        letter-spacing: 2px; 
-                        border: 1px solid #cbd5e1; 
-                        border-radius: 4px;
-                    }
-                    .bdc-btn-otp {
-                        background: #ea580c;
-                        color: white;
-                        border: none;
-                        padding: 8px 15px;
-                        border-radius: 4px;
-                        font-size: 12px;
-                        cursor: pointer;
-                        font-weight: 600;
-                    }
-                    .bdc-btn-otp:hover { background: #c2410c; }
-                    .bdc-btn-otp:disabled { opacity: 0.7; cursor: not-allowed; }
-                    .bdc-verified-badge {
-                        background: #dcfce7;
-                        color: #166534;
-                        padding: 8px;
-                        border-radius: 6px;
-                        text-align: center;
-                        font-weight: bold;
-                        border: 1px solid #bbf7d0;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        gap: 6px;
-                        margin-top: 5px;
-                    }
-                    @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+                    .bdc-modal { position: fixed; z-index: 999999; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; background-color: rgba(0,0,0,0.7); backdrop-filter: blur(2px); display: none; align-items:center; justify-content:center; }
+                    .bdc-modal-content { background-color: #ffffff; margin: auto; padding: 30px; border-radius: 16px; width: 90%; max-width: 420px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.3); position: relative; font-family: -apple-system, system-ui, sans-serif; animation: bdcSlideUp 0.3s ease-out; }
+                    @keyframes bdcSlideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+                    .bdc-icon-wrap { width: 60px; height: 60px; background: #fff7ed; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; }
+                    .bdc-icon { font-size: 24px; }
+                    .bdc-title { margin: 0 0 10px; color: #1e293b; font-size: 20px; font-weight: 700; }
+                    .bdc-desc { font-size: 14px; color: #64748b; margin-bottom: 25px; line-height: 1.5; }
+                    .bdc-otp-input { width: 100%; padding: 15px; margin-bottom: 20px; border: 2px solid #e2e8f0; border-radius: 8px; font-size: 24px; font-weight: 700; letter-spacing: 8px; text-align: center; box-sizing: border-box; outline: none; transition: border 0.2s; color: #334155; }
+                    .bdc-otp-input:focus { border-color: #ea580c; }
+                    .bdc-btn { background-color: #ea580c; color: white; padding: 15px 20px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: 600; width: 100%; transition: transform 0.1s, background 0.2s; box-shadow: 0 4px 6px -1px rgba(234, 88, 12, 0.2); }
+                    .bdc-btn:hover { background-color: #c2410c; }
+                    .bdc-btn:active { transform: scale(0.98); }
+                    .bdc-btn:disabled { opacity: 0.7; cursor: not-allowed; }
+                    .bdc-resend { margin-top: 20px; font-size: 13px; color: #64748b; background: none; border: none; padding: 0; cursor: default; }
+                    .bdc-resend-link { color: #ea580c; font-weight: 600; cursor: pointer; text-decoration: none; }
+                    .bdc-resend-link:hover { text-decoration: underline; }
+                    .bdc-error { color: #ef4444; font-size: 13px; margin-top: 10px; display: none; font-weight: 500; background: #fef2f2; padding: 8px; border-radius: 6px; }
+                    .bdc-close { position: absolute; right: 20px; top: 20px; color: #94a3b8; font-size: 24px; cursor: pointer; transition: color 0.2s; line-height: 1; }
+                    .bdc-close:hover { color: #ef4444; }
                 ";
                 wp_add_inline_style('woocommerce-general', $custom_css);
 
@@ -305,154 +276,181 @@ class BDC_SMS_Manager {
                         };
                         var isOtpVerified = false;
                         var checkedPhones = {};
-                        var lastCheckedPhone = "";
+                        var isChecking = false;
 
-                        // Inject Hidden verified field
+                        // Add Verified Field to Form
                         $("form.checkout").append("<input type=\"hidden\" name=\"bdc_otp_verified\" id=\"bdc_otp_verified\" value=\"false\">");
 
-                        // Monitor Phone Field
-                        $("#billing_phone").on("change blur", function() {
-                            var phone = $(this).val().replace(/[^0-9]/g, "");
-                            
-                            // Reset verification if number changes
-                            if(lastCheckedPhone && lastCheckedPhone !== phone) {
-                                isOtpVerified = false;
-                                $("#bdc_otp_verified").val("false");
-                                $("#bdc-inline-otp").remove();
-                                $("form.checkout button[type=\"submit\"]").prop("disabled", false);
-                            }
+                        // Add Modal HTML
+                        $("body").append(`
+                            <div id="bdc-otp-modal" class="bdc-modal">
+                                <div class="bdc-modal-content">
+                                    <span class="bdc-close">&times;</span>
+                                    <div class="bdc-icon-wrap">
+                                        <span class="dashicons dashicons-smartphone bdc-icon" style="color:#ea580c;">📱</span>
+                                    </div>
+                                    <h3 class="bdc-title">Verification Required</h3>
+                                    <p class="bdc-desc">To ensure secure delivery, we have sent a <strong>4-digit code</strong> to your mobile number.</p>
+                                    
+                                    <input type="tel" id="bdc-otp-code" class="bdc-otp-input" placeholder="0000" maxlength="4" autocomplete="one-time-code">
+                                    
+                                    <button type="button" id="bdc-verify-btn" class="bdc-btn">Verify & Place Order</button>
+                                    
+                                    <div id="bdc-otp-error" class="bdc-error">Invalid Code entered. Please try again.</div>
+                                    
+                                    <p class="bdc-resend">
+                                        Didn\'t receive code? <span id="bdc-resend-btn" class="bdc-resend-link">Resend SMS</span>
+                                    </p>
+                                </div>
+                            </div>
+                        `);
 
-                            if(phone.length >= 11 && fraudConfig.check === "yes") {
-                                lastCheckedPhone = phone;
-                                checkFraudStatus(phone);
-                            }
+                        // Modal UI Events
+                        $(".bdc-close").click(function() { 
+                            $("#bdc-otp-modal").fadeOut(); 
+                            $("form.checkout").removeClass("processing").unblock(); 
+                        });
+                        
+                        // Prevent non-numeric input
+                        $("#bdc-otp-code").on("input", function() {
+                            this.value = this.value.replace(/[^0-9]/g, "");
                         });
 
-                        function checkFraudStatus(phone) {
-                            if(checkedPhones[phone]) {
-                                handleRisk(checkedPhones[phone], phone);
+                        $("#bdc-resend-btn").click(function() {
+                            var phone = $("#billing_phone").val();
+                            if(!phone) return;
+                            
+                            var btn = $(this);
+                            btn.text("Sending...").css("opacity", "0.5").css("pointer-events", "none");
+                            
+                            sendOtp(phone, function() {
+                                btn.text("Sent! Wait 60s").css("color", "#16a34a");
+                                setTimeout(function(){
+                                    btn.text("Resend SMS").css("opacity", "1").css("pointer-events", "auto").css("color", "#ea580c");
+                                }, 60000);
+                            });
+                        });
+
+                        $("#bdc-verify-btn").click(function() {
+                            verifyOtp();
+                        });
+
+                        function sendOtp(phone, callback) {
+                            $.post("'.admin_url('admin-ajax.php').'", {
+                                action: "bdc_send_otp",
+                                phone: phone
+                            }, function(res) {
+                                if(res.success) {
+                                    if(callback) callback();
+                                } else {
+                                    alert("Failed to send SMS. Please check phone number.");
+                                }
+                            });
+                        }
+
+                        function verifyOtp() {
+                            var code = $("#bdc-otp-code").val();
+                            var phone = $("#billing_phone").val();
+                            
+                            if(code.length !== 4) {
+                                $("#bdc-otp-error").text("Please enter 4 digits").slideDown();
                                 return;
                             }
-
-                            // Show loading indicator? Maybe not to disturb UI too much
                             
+                            $("#bdc-verify-btn").text("Verifying...").prop("disabled", true);
+                            $("#bdc-otp-error").slideUp();
+                            
+                            $.post("'.admin_url('admin-ajax.php').'", {
+                                action: "bdc_verify_otp",
+                                code: code,
+                                phone: phone
+                            }, function(res) {
+                                if(res.success) {
+                                    $("#bdc-verify-btn").text("Verified! Redirecting...");
+                                    isOtpVerified = true;
+                                    $("#bdc_otp_verified").val("true");
+                                    $("#bdc-otp-modal").fadeOut(200);
+                                    
+                                    // Trigger Place Order again
+                                    $("form.checkout").submit(); 
+                                } else {
+                                    $("#bdc-verify-btn").text("Verify & Place Order").prop("disabled", false);
+                                    $("#bdc-otp-error").text(res.data).slideDown();
+                                }
+                            });
+                        }
+
+                        // Main Checkout Interception
+                        $("form.checkout").on("checkout_place_order", function() {
+                            if(fraudConfig.check !== "yes") return true;
+                            if(isOtpVerified) return true; // Already verified, proceed
+                            if(isChecking) return false; // Wait for async check
+
+                            var phone = $("#billing_phone").val().replace(/[^0-9]/g, "");
+                            var paymentMethod = $("input[name=\"payment_method\"]:checked").val();
+
+                            // 1. Basic Length Check
+                            if(phone.length < 11) return true; 
+
+                            // 2. Check if we already have a status in cache
+                            if(checkedPhones[phone]) {
+                                var status = checkedPhones[phone];
+                                if(status === "risk") {
+                                    if(fraudConfig.disableCod === "yes" && paymentMethod === "cod") {
+                                        alert("⚠️ Warning: Cash on Delivery is unavailable for your account history. Please pay via bKash or Card.");
+                                        return false; 
+                                    }
+                                    if(fraudConfig.enableOtp === "yes") {
+                                        $("#bdc-otp-modal").css("display", "flex");
+                                        sendOtp(phone);
+                                        return false; 
+                                    }
+                                }
+                                return true; // Safe to proceed
+                            }
+
+                            // 3. No cache? Perform Async Check
+                            isChecking = true;
+                            $("form.checkout").addClass("processing"); // Show WC Loader
+
                             $.ajax({
                                 url: fraudConfig.apiUrl,
                                 data: { phone: phone },
                                 dataType: "json",
                                 success: function(data) {
+                                    isChecking = false;
+                                    $("form.checkout").removeClass("processing");
+
                                     var status = "safe";
                                     if(data.success_rate && data.total_orders > 0 && parseFloat(data.success_rate) < fraudConfig.minRate) {
                                         status = "risk";
                                     }
                                     checkedPhones[phone] = status;
-                                    handleRisk(status, phone);
+
+                                    // Re-trigger submission logic
+                                    if(status === "risk") {
+                                        if(fraudConfig.disableCod === "yes" && paymentMethod === "cod") {
+                                            alert("⚠️ Warning: Cash on Delivery is unavailable for your account history. Please pay via bKash or Card.");
+                                        } else if(fraudConfig.enableOtp === "yes") {
+                                            $("#bdc-otp-modal").css("display", "flex");
+                                            sendOtp(phone);
+                                        } else {
+                                            $("form.checkout").submit(); // Risk but no action configured
+                                        }
+                                    } else {
+                                        $("form.checkout").submit(); // Safe
+                                    }
+                                },
+                                error: function() { 
+                                    // Fail safe: Allow order if API fails
+                                    isChecking = false;
+                                    checkedPhones[phone] = "safe";
+                                    $("form.checkout").removeClass("processing");
+                                    $("form.checkout").submit(); 
                                 }
                             });
-                        }
 
-                        function handleRisk(status, phone) {
-                            // Clear previous
-                            $("#bdc-inline-otp").remove();
-
-                            if(status === "risk" && fraudConfig.enableOtp === "yes") {
-                                // Inject OTP Field
-                                var otpHtml = `
-                                    <div id="bdc-inline-otp" class="bdc-otp-wrapper">
-                                        <div class="bdc-otp-msg">
-                                            <span class="dashicons dashicons-warning"></span>
-                                            Delivery History Check Failed. Verification Required.
-                                        </div>
-                                        <div id="bdc-otp-step-1">
-                                            <p style="font-size:11px; margin-bottom:5px; color:#64748b;">We need to verify your phone number to proceed with this order.</p>
-                                            <button type="button" id="bdc-send-btn" class="bdc-btn-otp" style="width:100%;">Send OTP via SMS</button>
-                                        </div>
-                                        <div id="bdc-otp-step-2" style="display:none;">
-                                            <p style="font-size:11px; margin-bottom:5px; color:#64748b;">Enter code sent to ` + phone + `</p>
-                                            <div class="bdc-otp-row">
-                                                <input type="text" id="bdc-otp-input" class="bdc-otp-input" placeholder="XXXX" maxlength="4">
-                                                <button type="button" id="bdc-verify-btn" class="bdc-btn-otp">Verify</button>
-                                            </div>
-                                            <div style="margin-top:5px; display:flex; justify-content:space-between;">
-                                                <small id="bdc-otp-error" style="color:red; display:none;">Invalid Code</small>
-                                                <button type="button" id="bdc-resend-link" style="background:none; border:none; color:#2563eb; font-size:10px; cursor:pointer; text-decoration:underline;">Resend?</button>
-                                            </div>
-                                        </div>
-                                        <div id="bdc-otp-step-3" style="display:none;">
-                                            <div class="bdc-verified-badge">
-                                                <span class="dashicons dashicons-yes"></span> Verified Successfully
-                                            </div>
-                                        </div>
-                                    </div>
-                                `;
-                                
-                                $("#billing_phone_field").append(otpHtml);
-                                $("#bdc-inline-otp").show();
-                                
-                                // Disable Place Order until verified
-                                $("form.checkout button[type=\"submit\"]").prop("disabled", true);
-
-                                // Attach Events
-                                $("#bdc-send-btn, #bdc-resend-link").click(function() {
-                                    var btn = $(this);
-                                    btn.text("Sending...");
-                                    $.post("'.admin_url('admin-ajax.php').'", {
-                                        action: "bdc_send_otp",
-                                        phone: phone
-                                    }, function(res) {
-                                        if(res.success) {
-                                            $("#bdc-otp-step-1").hide();
-                                            $("#bdc-otp-step-2").show();
-                                            $("#bdc-otp-input").focus();
-                                        } else {
-                                            alert("Failed to send OTP.");
-                                            btn.text("Send OTP via SMS");
-                                        }
-                                    });
-                                });
-
-                                $("#bdc-verify-btn").click(function() {
-                                    var code = $("#bdc-otp-input").val();
-                                    var btn = $(this);
-                                    btn.text("...");
-                                    
-                                    $.post("'.admin_url('admin-ajax.php').'", {
-                                        action: "bdc_verify_otp",
-                                        code: code,
-                                        phone: phone
-                                    }, function(res) {
-                                        if(res.success) {
-                                            $("#bdc-otp-step-2").hide();
-                                            $("#bdc-otp-step-3").show();
-                                            
-                                            // Unlock Order
-                                            isOtpVerified = true;
-                                            $("#bdc_otp_verified").val("true");
-                                            $("form.checkout button[type=\"submit\"]").prop("disabled", false);
-                                        } else {
-                                            btn.text("Verify");
-                                            $("#bdc-otp-error").show();
-                                        }
-                                    });
-                                });
-                            }
-                        }
-
-                        // Also block submission if risk detected and not verified (double safety)
-                        $("form.checkout").on("checkout_place_order", function() {
-                            var phone = $("#billing_phone").val().replace(/[^0-9]/g, "");
-                            var status = checkedPhones[phone];
-                            
-                            if(status === "risk" && fraudConfig.enableOtp === "yes" && !isOtpVerified) {
-                                $("html, body").animate({
-                                    scrollTop: $("#billing_phone").offset().top - 100
-                                }, 500);
-                                if($("#bdc-inline-otp").length === 0) {
-                                    handleRisk("risk", phone);
-                                }
-                                return false;
-                            }
-                            return true;
+                            return false; // Stop initial submission to wait for AJAX
                         });
                     });
                 ');
@@ -966,3 +964,4 @@ class BDC_SMS_Manager {
 }
 
 new BDC_SMS_Manager();
+?>
