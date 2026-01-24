@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Search, Bell, Globe, RefreshCcw, Calendar, ChevronDown, LayoutGrid, Settings, X, Truck, Copy, Check, Download, AlertCircle, Lock, MessageSquare } from 'lucide-react';
+import { Search, Bell, Globe, RefreshCcw, Calendar, ChevronDown, LayoutGrid, Settings, X, Truck, Copy, Check, Download, AlertCircle, Lock, MessageSquare, ShieldCheck } from 'lucide-react';
 import { getWPConfig, saveWPConfig, WPConfig } from '../services/wordpressService';
 import { getCourierConfig, saveCourierConfig, getRedxConfig, saveRedxConfig } from '../services/courierService';
 import { getPathaoConfig, savePathaoConfig } from '../services/pathaoService';
@@ -9,7 +9,7 @@ import { CourierConfig, PathaoConfig, RedxConfig } from '../types';
 
 export const TopBar: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
-  const [activeTab, setActiveTab] = useState<'wp' | 'courier' | 'pathao' | 'redx' | 'bkash' | 'sms'>('wp');
+  const [activeTab, setActiveTab] = useState<'wp' | 'courier' | 'pathao' | 'redx' | 'bkash' | 'sms' | 'fraud'>('wp');
   const [config, setConfig] = useState<WPConfig>({ url: '', consumerKey: '', consumerSecret: '' });
   const [courierConfig, setCourierConfig] = useState<CourierConfig>({ apiKey: '', secretKey: '', email: '', password: '' });
   const [pathaoConfig, setPathaoConfig] = useState<PathaoConfig>({
@@ -22,9 +22,29 @@ export const TopBar: React.FC = () => {
   const [smsGatewayConfig, setSmsGatewayConfig] = useState<SMSConfig>({
     endpoint: 'https://sms.mram.com.bd/smsapi', apiKey: '', senderId: ''
   });
+  const [hoorinApiKey, setHoorinApiKey] = useState('');
   
   const [copiedPathao, setCopiedPathao] = useState(false);
   const [copiedSteadfast, setCopiedSteadfast] = useState(false);
+
+  // Helper to fetch generic setting
+  const fetchGenericSetting = async (key: string) => {
+    try {
+      const res = await fetch(`api/settings.php?key=${key}`);
+      const text = await res.text();
+      return (text && text !== "null") ? text.replace(/^"|"$/g, '') : '';
+    } catch { return ''; }
+  };
+
+  const saveGenericSetting = async (key: string, value: string) => {
+    try {
+      await fetch('api/settings.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, value })
+      });
+    } catch (e) { console.error(e); }
+  };
 
   useEffect(() => {
     const loadConfig = async () => {
@@ -40,6 +60,9 @@ export const TopBar: React.FC = () => {
       if (savedBkash) setBkashConfig(savedBkash);
       const savedSms = await getSMSConfig();
       if (savedSms) setSmsGatewayConfig(savedSms);
+      
+      const savedHoorin = await fetchGenericSetting('hoorin_api_key');
+      setHoorinApiKey(savedHoorin || 'f72e06481ead7b346161b7');
     };
     if (showSettings) {
       loadConfig();
@@ -59,6 +82,8 @@ export const TopBar: React.FC = () => {
       await saveBkashConfig(bkashConfig);
     } else if (activeTab === 'sms') {
       await saveSMSConfig(smsGatewayConfig);
+    } else if (activeTab === 'fraud') {
+      await saveGenericSetting('hoorin_api_key', hoorinApiKey);
     }
     setShowSettings(false);
     window.location.reload();
@@ -146,42 +171,13 @@ export const TopBar: React.FC = () => {
             </div>
             
             <div className="flex border-b border-gray-100 shrink-0 overflow-x-auto">
-              <button 
-                onClick={() => setActiveTab('wp')}
-                className={`flex-1 py-3 text-[10px] font-bold uppercase whitespace-nowrap px-4 transition-colors ${activeTab === 'wp' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-400'}`}
-              >
-                WordPress
-              </button>
-              <button 
-                onClick={() => setActiveTab('courier')}
-                className={`flex-1 py-3 text-[10px] font-bold uppercase whitespace-nowrap px-4 transition-colors ${activeTab === 'courier' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-400'}`}
-              >
-                Steadfast
-              </button>
-              <button 
-                onClick={() => setActiveTab('pathao')}
-                className={`flex-1 py-3 text-[10px] font-bold uppercase whitespace-nowrap px-4 transition-colors ${activeTab === 'pathao' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-400'}`}
-              >
-                Pathao
-              </button>
-              <button 
-                onClick={() => setActiveTab('redx')}
-                className={`flex-1 py-3 text-[10px] font-bold uppercase whitespace-nowrap px-4 transition-colors ${activeTab === 'redx' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-400'}`}
-              >
-                RedX
-              </button>
-              <button 
-                onClick={() => setActiveTab('sms')}
-                className={`flex-1 py-3 text-[10px] font-bold uppercase whitespace-nowrap px-4 transition-colors ${activeTab === 'sms' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-400'}`}
-              >
-                SMS Gateway
-              </button>
-              <button 
-                onClick={() => setActiveTab('bkash')}
-                className={`flex-1 py-3 text-[10px] font-bold uppercase whitespace-nowrap px-4 transition-colors ${activeTab === 'bkash' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-400'}`}
-              >
-                bKash
-              </button>
+              <button onClick={() => setActiveTab('wp')} className={`flex-1 py-3 text-[10px] font-bold uppercase whitespace-nowrap px-4 transition-colors ${activeTab === 'wp' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-400'}`}>WordPress</button>
+              <button onClick={() => setActiveTab('courier')} className={`flex-1 py-3 text-[10px] font-bold uppercase whitespace-nowrap px-4 transition-colors ${activeTab === 'courier' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-400'}`}>Steadfast</button>
+              <button onClick={() => setActiveTab('pathao')} className={`flex-1 py-3 text-[10px] font-bold uppercase whitespace-nowrap px-4 transition-colors ${activeTab === 'pathao' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-400'}`}>Pathao</button>
+              <button onClick={() => setActiveTab('redx')} className={`flex-1 py-3 text-[10px] font-bold uppercase whitespace-nowrap px-4 transition-colors ${activeTab === 'redx' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-400'}`}>RedX</button>
+              <button onClick={() => setActiveTab('fraud')} className={`flex-1 py-3 text-[10px] font-bold uppercase whitespace-nowrap px-4 transition-colors ${activeTab === 'fraud' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-400'}`}>Fraud API</button>
+              <button onClick={() => setActiveTab('sms')} className={`flex-1 py-3 text-[10px] font-bold uppercase whitespace-nowrap px-4 transition-colors ${activeTab === 'sms' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-400'}`}>SMS Gateway</button>
+              <button onClick={() => setActiveTab('bkash')} className={`flex-1 py-3 text-[10px] font-bold uppercase whitespace-nowrap px-4 transition-colors ${activeTab === 'bkash' ? 'text-orange-600 border-b-2 border-orange-600' : 'text-gray-400'}`}>bKash</button>
             </div>
 
             <div className="p-6 space-y-4 overflow-y-auto custom-scrollbar">
@@ -189,50 +185,23 @@ export const TopBar: React.FC = () => {
                 <>
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold text-gray-400 uppercase">Site URL</label>
-                    <input 
-                      type="text" 
-                      placeholder="https://yourstore.com"
-                      className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500"
-                      value={config.url}
-                      onChange={(e) => setConfig({...config, url: e.target.value})}
-                    />
+                    <input type="text" placeholder="https://yourstore.com" className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" value={config.url} onChange={(e) => setConfig({...config, url: e.target.value})} />
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold text-gray-400 uppercase">Consumer Key</label>
-                    <input 
-                      type="password" 
-                      placeholder="ck_xxxxxxxx..."
-                      className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500"
-                      value={config.consumerKey}
-                      onChange={(e) => setConfig({...config, consumerKey: e.target.value})}
-                    />
+                    <input type="password" placeholder="ck_xxxxxxxx..." className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" value={config.consumerKey} onChange={(e) => setConfig({...config, consumerKey: e.target.value})} />
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold text-gray-400 uppercase">Consumer Secret</label>
-                    <input 
-                      type="password" 
-                      placeholder="cs_xxxxxxxx..."
-                      className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500"
-                      value={config.consumerSecret}
-                      onChange={(e) => setConfig({...config, consumerSecret: e.target.value})}
-                    />
+                    <input type="password" placeholder="cs_xxxxxxxx..." className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" value={config.consumerSecret} onChange={(e) => setConfig({...config, consumerSecret: e.target.value})} />
                   </div>
-                  
                   <div className="bg-orange-50 p-3 rounded-lg border border-orange-100 mt-4">
                     <div className="flex gap-3">
                       <AlertCircle size={20} className="text-orange-600 shrink-0" />
                       <div>
                         <h4 className="text-xs font-bold text-orange-800 mb-1">Upload Issue?</h4>
-                        <p className="text-[10px] text-orange-700 leading-relaxed mb-3">
-                          To fix image upload errors (401/CORS), please install our helper plugin on your WordPress site.
-                        </p>
-                        <a 
-                          href={pluginDownloadUrl} 
-                          download="bdcommerce-connect.php"
-                          className="inline-flex items-center gap-2 px-3 py-1.5 bg-orange-600 text-white text-[10px] font-bold rounded shadow-sm hover:bg-orange-700 transition-colors"
-                        >
-                          <Download size={12} /> Download Plugin
-                        </a>
+                        <p className="text-[10px] text-orange-700 leading-relaxed mb-3">To fix image upload errors (401/CORS), please install our helper plugin on your WordPress site.</p>
+                        <a href={pluginDownloadUrl} download="bdcommerce-connect.php" className="inline-flex items-center gap-2 px-3 py-1.5 bg-orange-600 text-white text-[10px] font-bold rounded shadow-sm hover:bg-orange-700 transition-colors"><Download size={12} /> Download Plugin</a>
                       </div>
                     </div>
                   </div>
@@ -243,67 +212,18 @@ export const TopBar: React.FC = () => {
                 <>
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold text-gray-400 uppercase">API Key</label>
-                    <input 
-                      type="password" 
-                      placeholder="Your Steadfast API Key"
-                      className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500"
-                      value={courierConfig.apiKey}
-                      onChange={(e) => setCourierConfig({...courierConfig, apiKey: e.target.value})}
-                    />
+                    <input type="password" placeholder="Your Steadfast API Key" className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" value={courierConfig.apiKey} onChange={(e) => setCourierConfig({...courierConfig, apiKey: e.target.value})} />
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold text-gray-400 uppercase">Secret Key</label>
-                    <input 
-                      type="password" 
-                      placeholder="Your Steadfast Secret Key"
-                      className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500"
-                      value={courierConfig.secretKey}
-                      onChange={(e) => setCourierConfig({...courierConfig, secretKey: e.target.value})}
-                    />
+                    <input type="password" placeholder="Your Steadfast Secret Key" className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" value={courierConfig.secretKey} onChange={(e) => setCourierConfig({...courierConfig, secretKey: e.target.value})} />
                   </div>
-
-                  <div className="bg-orange-50 p-3 rounded-lg border border-orange-100 mt-2 mb-2">
-                    <p className="text-[10px] text-orange-700 font-bold mb-2 uppercase">For Global Fraud Check (Login)</p>
-                    <div className="space-y-2">
-                        <div className="space-y-1">
-                            <label className="text-[10px] font-bold text-gray-400 uppercase">Email</label>
-                            <input 
-                            type="email" 
-                            placeholder="Steadfast Account Email"
-                            className="w-full p-2 bg-white border border-gray-200 rounded-lg text-xs outline-none focus:border-orange-500"
-                            value={courierConfig.email || ''}
-                            onChange={(e) => setCourierConfig({...courierConfig, email: e.target.value})}
-                            />
-                        </div>
-                        <div className="space-y-1">
-                            <label className="text-[10px] font-bold text-gray-400 uppercase">Password</label>
-                            <input 
-                            type="password" 
-                            placeholder="Steadfast Account Password"
-                            className="w-full p-2 bg-white border border-gray-200 rounded-lg text-xs outline-none focus:border-orange-500"
-                            value={courierConfig.password || ''}
-                            onChange={(e) => setCourierConfig({...courierConfig, password: e.target.value})}
-                            />
-                        </div>
-                    </div>
-                  </div>
-
                   <div className="pt-2 border-t border-gray-100 mt-2 space-y-3">
                     <div className="space-y-1">
                       <label className="text-[10px] font-bold text-orange-600 uppercase">Webhook URL (Copy to Steadfast Panel)</label>
                       <div className="flex gap-2">
-                        <input 
-                          type="text" 
-                          readOnly
-                          value={steadfastWebhookUrl}
-                          className="flex-1 p-2 bg-gray-100 border border-gray-200 rounded text-[10px] font-mono outline-none"
-                        />
-                        <button 
-                          onClick={copySteadfast}
-                          className="p-2 bg-orange-600 text-white rounded hover:bg-orange-700 transition-colors"
-                        >
-                          {copiedSteadfast ? <Check size={14} /> : <Copy size={14} />}
-                        </button>
+                        <input type="text" readOnly value={steadfastWebhookUrl} className="flex-1 p-2 bg-gray-100 border border-gray-200 rounded text-[10px] font-mono outline-none" />
+                        <button onClick={copySteadfast} className="p-2 bg-orange-600 text-white rounded hover:bg-orange-700 transition-colors">{copiedSteadfast ? <Check size={14} /> : <Copy size={14} />}</button>
                       </div>
                     </div>
                   </div>
@@ -315,91 +235,42 @@ export const TopBar: React.FC = () => {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1">
                       <label className="text-[10px] font-bold text-gray-400 uppercase">Client ID</label>
-                      <input 
-                        type="text" 
-                        className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-xs outline-none focus:border-orange-500"
-                        value={pathaoConfig.clientId}
-                        onChange={(e) => setPathaoConfig({...pathaoConfig, clientId: e.target.value})}
-                      />
+                      <input type="text" className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-xs outline-none focus:border-orange-500" value={pathaoConfig.clientId} onChange={(e) => setPathaoConfig({...pathaoConfig, clientId: e.target.value})} />
                     </div>
                     <div className="space-y-1">
                       <label className="text-[10px] font-bold text-gray-400 uppercase">Client Secret</label>
-                      <input 
-                        type="password" 
-                        className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-xs outline-none focus:border-orange-500"
-                        value={pathaoConfig.clientSecret}
-                        onChange={(e) => setPathaoConfig({...pathaoConfig, clientSecret: e.target.value})}
-                      />
+                      <input type="password" className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-xs outline-none focus:border-orange-500" value={pathaoConfig.clientSecret} onChange={(e) => setPathaoConfig({...pathaoConfig, clientSecret: e.target.value})} />
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1">
                       <label className="text-[10px] font-bold text-gray-400 uppercase">Username</label>
-                      <input 
-                        type="text" 
-                        className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-xs outline-none focus:border-orange-500"
-                        value={pathaoConfig.username}
-                        onChange={(e) => setPathaoConfig({...pathaoConfig, username: e.target.value})}
-                      />
+                      <input type="text" className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-xs outline-none focus:border-orange-500" value={pathaoConfig.username} onChange={(e) => setPathaoConfig({...pathaoConfig, username: e.target.value})} />
                     </div>
                     <div className="space-y-1">
                       <label className="text-[10px] font-bold text-gray-400 uppercase">Password</label>
-                      <input 
-                        type="password" 
-                        className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-xs outline-none focus:border-orange-500"
-                        value={pathaoConfig.password}
-                        onChange={(e) => setPathaoConfig({...pathaoConfig, password: e.target.value})}
-                      />
+                      <input type="password" className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-xs outline-none focus:border-orange-500" value={pathaoConfig.password} onChange={(e) => setPathaoConfig({...pathaoConfig, password: e.target.value})} />
                     </div>
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold text-gray-400 uppercase">Store ID</label>
-                    <input 
-                      type="text" 
-                      placeholder="Your Pathao Store ID"
-                      className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500"
-                      value={pathaoConfig.storeId}
-                      onChange={(e) => setPathaoConfig({...pathaoConfig, storeId: e.target.value})}
-                    />
+                    <input type="text" placeholder="Your Pathao Store ID" className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" value={pathaoConfig.storeId} onChange={(e) => setPathaoConfig({...pathaoConfig, storeId: e.target.value})} />
                   </div>
-                  
                   <div className="pt-2 border-t border-gray-100 mt-2 space-y-3">
                     <div className="space-y-1">
                       <label className="text-[10px] font-bold text-orange-600 uppercase">Webhook URL (Copy to Pathao Panel)</label>
                       <div className="flex gap-2">
-                        <input 
-                          type="text" 
-                          readOnly
-                          value={pathaoWebhookUrl}
-                          className="flex-1 p-2 bg-gray-100 border border-gray-200 rounded text-[10px] font-mono outline-none"
-                        />
-                        <button 
-                          onClick={copyPathao}
-                          className="p-2 bg-orange-600 text-white rounded hover:bg-orange-700 transition-colors"
-                        >
-                          {copiedPathao ? <Check size={14} /> : <Copy size={14} />}
-                        </button>
+                        <input type="text" readOnly value={pathaoWebhookUrl} className="flex-1 p-2 bg-gray-100 border border-gray-200 rounded text-[10px] font-mono outline-none" />
+                        <button onClick={copyPathao} className="p-2 bg-orange-600 text-white rounded hover:bg-orange-700 transition-colors">{copiedPathao ? <Check size={14} /> : <Copy size={14} />}</button>
                       </div>
                     </div>
                     <div className="space-y-1">
                       <label className="text-[10px] font-bold text-gray-400 uppercase">Webhook Secret / Signature</label>
-                      <input 
-                        type="password" 
-                        placeholder="Provided by Pathao Integration"
-                        className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500"
-                        value={pathaoConfig.webhookSecret || ''}
-                        onChange={(e) => setPathaoConfig({...pathaoConfig, webhookSecret: e.target.value})}
-                      />
+                      <input type="password" placeholder="Provided by Pathao Integration" className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" value={pathaoConfig.webhookSecret || ''} onChange={(e) => setPathaoConfig({...pathaoConfig, webhookSecret: e.target.value})} />
                     </div>
                   </div>
-
                   <div className="flex items-center gap-2">
-                    <input 
-                      type="checkbox" 
-                      id="sandbox"
-                      checked={pathaoConfig.isSandbox}
-                      onChange={(e) => setPathaoConfig({...pathaoConfig, isSandbox: e.target.checked})}
-                    />
+                    <input type="checkbox" id="sandbox" checked={pathaoConfig.isSandbox} onChange={(e) => setPathaoConfig({...pathaoConfig, isSandbox: e.target.checked})} />
                     <label htmlFor="sandbox" className="text-xs font-medium text-gray-600">Use Sandbox (Testing)</label>
                   </div>
                 </>
@@ -407,68 +278,45 @@ export const TopBar: React.FC = () => {
 
               {activeTab === 'redx' && (
                 <div className="space-y-4 animate-in fade-in">
-                    <div className="bg-red-50 p-3 rounded-lg border border-red-100 mb-2 flex items-center gap-3 text-red-700">
-                        <Truck size={18} />
-                        <p className="text-[10px]">Configure RedX integration. Used for fetching delivery history in fraud checks.</p>
-                    </div>
+                    <div className="bg-red-50 p-3 rounded-lg border border-red-100 mb-2 flex items-center gap-3 text-red-700"><Truck size={18} /><p className="text-[10px]">Configure RedX integration. Used for fetching delivery history in fraud checks.</p></div>
                     <div className="space-y-1">
                         <label className="text-[10px] font-bold text-gray-400 uppercase">Access Token (Bearer)</label>
-                        <input 
-                          type="password" 
-                          value={redxConfig.accessToken} 
-                          onChange={e => setRedxConfig({...redxConfig, accessToken: e.target.value})} 
-                          className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" 
-                          placeholder="Your RedX Access Token" 
-                        />
+                        <input type="password" value={redxConfig.accessToken} onChange={e => setRedxConfig({...redxConfig, accessToken: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" placeholder="Your RedX Access Token" />
+                    </div>
+                </div>
+              )}
+
+              {activeTab === 'fraud' && (
+                <div className="space-y-4 animate-in fade-in">
+                    <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100 mb-2 flex items-center gap-3 text-indigo-700"><ShieldCheck size={18} /><p className="text-[10px]">Configure Hoorin Fraud Check API. Provides aggregated delivery stats.</p></div>
+                    <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-gray-400 uppercase">Hoorin API Key</label>
+                        <input type="text" value={hoorinApiKey} onChange={e => setHoorinApiKey(e.target.value)} className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" placeholder="Your Hoorin API Key" />
                     </div>
                 </div>
               )}
 
               {activeTab === 'sms' && (
                 <div className="space-y-4 animate-in fade-in">
-                    <div className="bg-orange-50 p-3 rounded-lg border border-orange-100 mb-2 flex items-center gap-3 text-orange-700">
-                        <MessageSquare size={18} />
-                        <p className="text-[10px]">Configure your SMS Gateway here. These settings are used by both the Dashboard and the WordPress plugin.</p>
-                    </div>
+                    <div className="bg-orange-50 p-3 rounded-lg border border-orange-100 mb-2 flex items-center gap-3 text-orange-700"><MessageSquare size={18} /><p className="text-[10px]">Configure your SMS Gateway here. These settings are used by both the Dashboard and the WordPress plugin.</p></div>
                     <div className="space-y-1">
                         <label className="text-[10px] font-bold text-gray-400 uppercase">API Endpoint</label>
-                        <input 
-                          type="text" 
-                          value={smsGatewayConfig.endpoint} 
-                          onChange={e => setSmsGatewayConfig({...smsGatewayConfig, endpoint: e.target.value})} 
-                          className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" 
-                          placeholder="https://sms.mram.com.bd/smsapi" 
-                        />
+                        <input type="text" value={smsGatewayConfig.endpoint} onChange={e => setSmsGatewayConfig({...smsGatewayConfig, endpoint: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" placeholder="https://sms.mram.com.bd/smsapi" />
                     </div>
                     <div className="space-y-1">
                         <label className="text-[10px] font-bold text-gray-400 uppercase">API Key</label>
-                        <input 
-                          type="password" 
-                          value={smsGatewayConfig.apiKey} 
-                          onChange={e => setSmsGatewayConfig({...smsGatewayConfig, apiKey: e.target.value})} 
-                          className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" 
-                          placeholder="Your SMS API Key" 
-                        />
+                        <input type="password" value={smsGatewayConfig.apiKey} onChange={e => setSmsGatewayConfig({...smsGatewayConfig, apiKey: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" placeholder="Your SMS API Key" />
                     </div>
                     <div className="space-y-1">
                         <label className="text-[10px] font-bold text-gray-400 uppercase">Sender ID</label>
-                        <input 
-                          type="text" 
-                          value={smsGatewayConfig.senderId} 
-                          onChange={e => setSmsGatewayConfig({...smsGatewayConfig, senderId: e.target.value})} 
-                          className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" 
-                          placeholder="Sender ID" 
-                        />
+                        <input type="text" value={smsGatewayConfig.senderId} onChange={e => setSmsGatewayConfig({...smsGatewayConfig, senderId: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" placeholder="Sender ID" />
                     </div>
                 </div>
               )}
 
               {activeTab === 'bkash' && (
                 <div className="space-y-4 animate-in fade-in">
-                    <div className="bg-pink-50 p-3 rounded-lg border border-pink-100 mb-4 flex items-center gap-3 text-pink-700">
-                        <Lock size={18} />
-                        <p className="text-[10px]">These credentials are stored securely in your database and are used for payment verification.</p>
-                    </div>
+                    <div className="bg-pink-50 p-3 rounded-lg border border-pink-100 mb-4 flex items-center gap-3 text-pink-700"><Lock size={18} /><p className="text-[10px]">These credentials are stored securely in your database and are used for payment verification.</p></div>
                     <div className="space-y-1">
                         <label className="text-[10px] font-bold text-gray-400 uppercase">App Key</label>
                         <input type="text" value={bkashConfig.appKey} onChange={e => setBkashConfig({...bkashConfig, appKey: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" placeholder="App Key" />
@@ -486,24 +334,14 @@ export const TopBar: React.FC = () => {
                         <input type="password" value={bkashConfig.password} onChange={e => setBkashConfig({...bkashConfig, password: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-100 rounded-lg text-sm outline-none focus:border-orange-500" placeholder="Password" />
                     </div>
                     <div className="flex items-center gap-2 pt-2">
-                        <input 
-                          type="checkbox" 
-                          id="bkash-sandbox" 
-                          checked={bkashConfig.isSandbox || false} 
-                          onChange={e => setBkashConfig({...bkashConfig, isSandbox: e.target.checked})} 
-                        />
+                        <input type="checkbox" id="bkash-sandbox" checked={bkashConfig.isSandbox || false} onChange={e => setBkashConfig({...bkashConfig, isSandbox: e.target.checked})} />
                         <label htmlFor="bkash-sandbox" className="text-xs font-medium text-gray-600">Use Sandbox Mode (Test)</label>
                     </div>
                 </div>
               )}
 
               <div className="pt-4 shrink-0">
-                <button 
-                  onClick={handleSave}
-                  className="w-full py-3 bg-orange-600 text-white font-bold rounded-xl shadow-lg hover:bg-orange-700 transition-all active:scale-[0.98]"
-                >
-                  Save & Connect
-                </button>
+                <button onClick={handleSave} className="w-full py-3 bg-orange-600 text-white font-bold rounded-xl shadow-lg hover:bg-orange-700 transition-all active:scale-[0.98]">Save & Connect</button>
               </div>
             </div>
           </div>
