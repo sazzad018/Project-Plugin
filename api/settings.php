@@ -1,6 +1,4 @@
-
 <?php
-// Prevent any unwanted output
 ob_start();
 
 header("Access-Control-Allow-Origin: *");
@@ -16,6 +14,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 include 'db.php';
 
+// Clear any output from db.php include
+ob_clean();
+
 // Ensure table exists
 $conn->query("CREATE TABLE IF NOT EXISTS settings (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -23,9 +24,6 @@ $conn->query("CREATE TABLE IF NOT EXISTS settings (
     setting_value TEXT,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 )");
-
-// Clean buffer before response
-ob_clean();
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $key = isset($_GET['key']) ? $_GET['key'] : '';

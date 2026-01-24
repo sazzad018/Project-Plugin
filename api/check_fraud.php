@@ -1,32 +1,40 @@
 <?php
-// Increase execution time & memory
-set_time_limit(120); 
-ini_set('max_execution_time', 120);
-ini_set('memory_limit', '256M');
+ob_start(); // Start buffering to catch any whitespace
 
-// Enable error logging internally but hide from output
+// Performance & Error Handling Settings
+set_time_limit(180); 
+ini_set('max_execution_time', 180);
+ini_set('memory_limit', '512M');
 ini_set('display_errors', 0);
 error_reporting(E_ALL);
 
+// CORS & Headers
 header("Access-Control-Allow-Origin: *");
 header("Content-Type: application/json; charset=UTF-8");
 header("Access-Control-Allow-Methods: GET, POST, OPTIONS");
 header("Access-Control-Allow-Headers: Content-Type");
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    ob_end_clean();
     http_response_code(200);
     exit;
 }
 
 include 'db.php';
 
-// --- CONFIGURATION & HELPERS ---
+// Clean the buffer to remove any whitespace from db.php or others
+ob_clean();
 
-// Use a local directory for cookies
+// --- HELPERS ---
+
+// 1. Cookie Management for Steadfast
 $cookieDir = __DIR__ . '/cookies';
 if (!file_exists($cookieDir)) {
-    @mkdir($cookieDir, 0755, true);
-    @file_put_contents($cookieDir . '/index.php', '<?php // Silence is golden');
+    if (!@mkdir($cookieDir, 0755, true)) {
+        $cookieDir = sys_get_temp_dir();
+    } else {
+        @file_put_contents($cookieDir . '/index.php', '<?php // Silence is golden');
+    }
 }
 
 function getSetting($conn, $key) {
@@ -51,11 +59,9 @@ function saveSetting($conn, $key, $value) {
 
 function getRandomUserAgent() {
     $agents = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
-        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/120.0.0.0'
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
     ];
     return $agents[array_rand($agents)];
 }
@@ -63,26 +69,28 @@ function getRandomUserAgent() {
 function make_request($url, $method = 'GET', $params = [], $cookie_file = null) {
     $ch = curl_init();
     
-    $defaultHeaders = [
+    // Base Headers
+    $headers = [
         'User-Agent: ' . getRandomUserAgent(),
-        'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept: application/json, text/plain, */*',
         'Accept-Language: en-US,en;q=0.9',
-        'Cache-Control: no-cache',
-        'Connection: keep-alive',
-        'Upgrade-Insecure-Requests: 1'
+        'Connection: keep-alive'
     ];
 
-    $customHeaders = isset($params['headers']) ? $params['headers'] : [];
-    $finalHeaders = array_merge($defaultHeaders, $customHeaders);
+    if (isset($params['headers'])) {
+        $headers = array_merge($headers, $params['headers']);
+    }
 
+    // CURL Options
     curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
     curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
     curl_setopt($ch, CURLOPT_MAXREDIRS, 10);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 40);
-    curl_setopt($ch, CURLOPT_ENCODING, "");
+    curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+    curl_setopt($ch, CURLOPT_ENCODING, ""); // Handle compressed responses
+    curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4); 
     
     if ($cookie_file) {
         curl_setopt($ch, CURLOPT_COOKIEJAR, $cookie_file);
@@ -93,23 +101,26 @@ function make_request($url, $method = 'GET', $params = [], $cookie_file = null) 
         curl_setopt($ch, CURLOPT_POST, true);
         if (isset($params['body'])) {
             $body = $params['body'];
-            if (is_array($body)) {
-                $isJson = false;
-                foreach($finalHeaders as $h) {
-                    if (stripos($h, 'application/json') !== false) $isJson = true;
+            // Check content type to decide encoding
+            $isJson = false;
+            foreach ($headers as $h) {
+                if (stripos($h, 'Content-Type: application/json') !== false) {
+                    $isJson = true;
+                    break;
                 }
-                if ($isJson) {
-                    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body));
-                } else {
-                    curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($body));
-                }
+            }
+            
+            if ($isJson && is_array($body)) {
+                curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body));
+            } elseif (is_array($body)) {
+                curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($body));
             } else {
                 curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
             }
         }
     }
 
-    curl_setopt($ch, CURLOPT_HTTPHEADER, $finalHeaders);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
 
     $response = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -128,7 +139,11 @@ function make_request($url, $method = 'GET', $params = [], $cookie_file = null) 
 // --- INPUT HANDLING ---
 
 $phone = isset($_GET['phone']) ? preg_replace('/[^0-9]/', '', $_GET['phone']) : '';
-$phone = preg_replace('/^88/', '', $phone);
+// Standardize phone
+if (substr($phone, 0, 2) === '88') {
+    $phone = substr($phone, 2);
+}
+
 $forceRefresh = isset($_GET['refresh']) && $_GET['refresh'] === 'true';
 
 if (empty($phone) || strlen($phone) < 10) {
@@ -136,7 +151,7 @@ if (empty($phone) || strlen($phone) < 10) {
     exit;
 }
 
-// --- 1. CACHE CHECK (DATABASE) ---
+// --- 1. CACHE CHECK ---
 if (!$forceRefresh) {
     $cacheSql = "SELECT * FROM fraud_check_cache WHERE phone = '$phone' AND updated_at > NOW() - INTERVAL 24 HOUR";
     $cacheRes = $conn->query($cacheSql);
@@ -145,24 +160,15 @@ if (!$forceRefresh) {
         $row = $cacheRes->fetch_assoc();
         $cacheData = json_decode($row['data'], true);
         
-        $delivered = 0;
-        $cancelled = 0;
-        $breakdown = [];
-
-        if (isset($cacheData['delivered']) && isset($cacheData['breakdown'])) {
-            $delivered = (int)$cacheData['delivered'];
-            $cancelled = (int)$cacheData['cancelled'];
-            $breakdown = $cacheData['breakdown'];
-        } else if (is_array($cacheData)) {
-            $breakdown = $cacheData;
-            foreach ($breakdown as $item) {
-                if (isset($item['status']) && preg_match('/Del:\s*(\d+).*?Can:\s*(\d+)/', $item['status'], $matches)) {
-                    $delivered += (int)$matches[1];
-                    $cancelled += (int)$matches[2];
-                }
-            }
-        }
+        $delivered = $cacheData['delivered'] ?? 0;
+        $cancelled = $cacheData['cancelled'] ?? 0;
+        $breakdown = $cacheData['breakdown'] ?? [];
         
+        // Legacy support
+        if (empty($breakdown) && is_array($cacheData)) {
+            if (isset($cacheData['delivered'])) $delivered = (int)$cacheData['delivered'];
+        }
+
         echo json_encode([
             "source" => "local_cache",
             "success_rate" => (float)$row['success_rate'],
@@ -187,31 +193,27 @@ $history = [
     'debug' => []
 ];
 
-// Fetch Configurations
+// Load Configs
 $steadfastConfig = getSetting($conn, 'courier_config');
 $pathaoConfig = getSetting($conn, 'pathao_config');
 $redxConfig = getSetting($conn, 'redx_config');
 
-// STEADFAST LOGIC
+// A. STEADFAST LOGIC
 if ($steadfastConfig && !empty($steadfastConfig['email']) && !empty($steadfastConfig['password'])) {
     
     $cookieFile = $cookieDir . '/sf_' . md5($steadfastConfig['email']) . '.txt';
-    $attempts = 0;
-    $success = false;
+    $sfSuccess = false;
+    $sfAttempts = 0;
 
-    while ($attempts < 2 && !$success) {
-        $attempts++;
+    while ($sfAttempts < 2 && !$sfSuccess) {
+        $sfAttempts++;
         $isLoggedIn = false;
 
-        // Check cache file age
         if (file_exists($cookieFile) && (time() - filemtime($cookieFile) < 2700)) {
             $isLoggedIn = true;
         }
 
         if (!$isLoggedIn) {
-            // Add slight delay to prevent rate limiting
-            if ($attempts > 1) sleep(1);
-
             $resInit = make_request("https://steadfast.com.bd/login", 'GET', [], $cookieFile);
             if (preg_match('/<input type="hidden" name="_token" value="(.*?)"/', $resInit['body'], $matches)) {
                 $token = $matches[1];
@@ -232,8 +234,10 @@ if ($steadfastConfig && !empty($steadfastConfig['email']) && !empty($steadfastCo
                 if (strpos($loginRes['url'], '/dashboard') !== false || strpos($loginRes['body'], 'Dashboard') !== false) {
                     $isLoggedIn = true;
                 } else {
-                    $history['debug'][] = "Steadfast: Login failed on attempt $attempts";
+                    $history['debug'][] = "Steadfast: Login failed (Attempt $sfAttempts)";
                 }
+            } else {
+                $history['debug'][] = "Steadfast: CSRF token missing";
             }
         }
 
@@ -257,48 +261,42 @@ if ($steadfastConfig && !empty($steadfastConfig['email']) && !empty($steadfastCo
                     if ($s_tot > 0) {
                         $history['breakdown'][] = ['courier' => 'Steadfast', 'status' => "Del: $s_del | Can: $s_can"];
                     }
-                    $success = true;
+                    $sfSuccess = true;
                 }
             } else {
-                // Session potentially expired, delete cookie to force login on next loop/request
+                // Invalid response, likely session timeout
                 @unlink($cookieFile);
-                $history['debug'][] = "Steadfast: Invalid JSON/Session, retrying...";
+                $history['debug'][] = "Steadfast: Invalid response, cookie cleared.";
             }
         }
+        
+        if (!$sfSuccess) sleep(1);
     }
+} else {
+    $history['debug'][] = "Steadfast: Config missing";
 }
 
-// PATHAO LOGIC - FIXED AUTO REFRESH
+// B. PATHAO LOGIC
 if ($pathaoConfig && !empty($pathaoConfig['username']) && !empty($pathaoConfig['password'])) {
     
-    $pSession = getSetting($conn, 'pathao_merchant_token');
-    $accessToken = $pSession['token'] ?? '';
-    $expiry = $pSession['expiry'] ?? 0;
-    
-    $needsAuth = true;
-
-    // Helper to get token
-    function getPathaoToken($config) {
-        $loginRes = make_request("https://merchant.pathao.com/api/v1/login", 'POST', [
+    function getPathaoAccessToken($config) {
+        $res = make_request("https://merchant.pathao.com/api/v1/login", 'POST', [
             'headers' => ['Content-Type: application/json'],
             'body' => [
                 'username' => $config['username'],
                 'password' => $config['password']
             ]
         ]);
-        $authData = json_decode($loginRes['body'], true);
-        if (isset($authData['access_token'])) {
-            return $authData['access_token'];
-        }
-        return null;
+        $data = json_decode($res['body'], true);
+        return $data['access_token'] ?? null;
     }
 
-    if ($accessToken && time() < $expiry) {
-        $needsAuth = false;
-    }
+    $pSession = getSetting($conn, 'pathao_merchant_token');
+    $accessToken = $pSession['token'] ?? '';
+    $expiry = $pSession['expiry'] ?? 0;
 
-    if ($needsAuth) {
-        $accessToken = getPathaoToken($pathaoConfig);
+    if (!$accessToken || time() > $expiry) {
+        $accessToken = getPathaoAccessToken($pathaoConfig);
         if ($accessToken) {
             saveSetting($conn, 'pathao_merchant_token', ['token' => $accessToken, 'expiry' => time() + 20000]);
         }
@@ -314,15 +312,11 @@ if ($pathaoConfig && !empty($pathaoConfig['username']) && !empty($pathaoConfig['
             'body' => ['phone' => $phone]
         ]);
 
-        $pData = json_decode($resCheck['body'], true);
-        
-        // Handle Token Expiry on the fly (401)
         if ($resCheck['code'] == 401) {
             $history['debug'][] = "Pathao: Token expired, refreshing...";
-            $accessToken = getPathaoToken($pathaoConfig);
+            $accessToken = getPathaoAccessToken($pathaoConfig);
             if ($accessToken) {
                 saveSetting($conn, 'pathao_merchant_token', ['token' => $accessToken, 'expiry' => time() + 20000]);
-                // Retry request with new token
                 $resCheck = make_request($checkUrl, 'POST', [
                     'headers' => [
                         'Content-Type: application/json',
@@ -330,9 +324,10 @@ if ($pathaoConfig && !empty($pathaoConfig['username']) && !empty($pathaoConfig['
                     ],
                     'body' => ['phone' => $phone]
                 ]);
-                $pData = json_decode($resCheck['body'], true);
             }
         }
+
+        $pData = json_decode($resCheck['body'], true);
         
         if (isset($pData['data']['customer'])) {
             $cust = $pData['data']['customer'];
@@ -346,43 +341,54 @@ if ($pathaoConfig && !empty($pathaoConfig['username']) && !empty($pathaoConfig['
                 $history['total'] += $tot;
                 $history['breakdown'][] = ['courier' => 'Pathao', 'status' => "Del: $del | Can: $can"];
             }
+        } else {
+             $history['debug'][] = "Pathao: No data or API change.";
         }
+    } else {
+        $history['debug'][] = "Pathao: Auth failed";
     }
+} else {
+    $history['debug'][] = "Pathao: Config missing";
 }
 
-// REDX LOGIC
+// C. REDX LOGIC
 if ($redxConfig && !empty($redxConfig['accessToken'])) {
-    $checkUrl = 'https://redx.com.bd/api/redx_se/admin/parcel/customer-success-return-rate?phoneNumber=88' . $phone;
+    $redxPhone = '88' . $phone;
+    $checkUrl = 'https://redx.com.bd/api/redx_se/admin/parcel/customer-success-return-rate?phoneNumber=' . $redxPhone;
+    
     $resCheck = make_request($checkUrl, 'GET', [
         'headers' => [
             'Authorization: Bearer ' . trim($redxConfig['accessToken']),
-            'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
             'Accept: application/json',
             'Content-Type: application/json'
         ]
     ]);
+    
     $rData = json_decode($resCheck['body'], true);
     if ($rData && isset($rData['data'])) {
         $del = (int)($rData['data']['deliveredParcels'] ?? 0);
         $tot = (int)($rData['data']['totalParcels'] ?? 0);
         $can = $tot - $del;
+        
         if ($tot > 0) {
             $history['delivered'] += $del;
             $history['cancelled'] += $can;
             $history['total'] += $tot;
             $history['breakdown'][] = ['courier' => 'RedX', 'status' => "Del: $del | Can: $can"];
         }
+    } else {
+        $history['debug'][] = "RedX: Fetch failed";
     }
 }
 
-// --- CALCULATE & SAVE ---
+// --- FINAL CALCULATION ---
 
 $success_rate = 0;
 if ($history['total'] > 0) {
     $success_rate = ($history['delivered'] / $history['total']) * 100;
 }
 
-// Save Full History Object to Database
+// Cache the result
 $jsonData = $conn->real_escape_string(json_encode($history));
 $sql = "INSERT INTO fraud_check_cache (phone, data, success_rate, total_orders) 
         VALUES ('$phone', '$jsonData', $success_rate, {$history['total']})

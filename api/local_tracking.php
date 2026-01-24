@@ -1,4 +1,3 @@
-
 <?php
 ob_start();
 header("Access-Control-Allow-Origin: *");
@@ -13,6 +12,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 include 'db.php';
+ob_clean(); // Ensure clean output
 
 // Create table if not exists
 $conn->query("CREATE TABLE IF NOT EXISTS local_tracking (
@@ -23,8 +23,6 @@ $conn->query("CREATE TABLE IF NOT EXISTS local_tracking (
     courier_name VARCHAR(50),
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 )");
-
-ob_clean();
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $result = $conn->query("SELECT * FROM local_tracking ORDER BY updated_at DESC");

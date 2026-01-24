@@ -1,4 +1,3 @@
-
 <?php
 ob_start();
 header("Access-Control-Allow-Origin: *");
@@ -13,6 +12,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 include 'db.php';
+ob_clean();
 
 // Create table if not exists
 $conn->query("CREATE TABLE IF NOT EXISTS customers (
@@ -26,8 +26,6 @@ $conn->query("CREATE TABLE IF NOT EXISTS customers (
     order_count INT DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )");
-
-ob_clean();
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $result = $conn->query("SELECT name, phone, email, address, avatar, total_spent as totalSpent, order_count as orderCount FROM customers ORDER BY order_count DESC");
@@ -59,8 +57,6 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($check && $check->num_rows > 0) {
             $row = $check->fetch_assoc();
             $new_total = (float)$row['total_spent'] + $order_total;
-            // Only increment order count if this request comes from a new order (simple logic: if total > 0)
-            // Or better, just update details. For full POS sync, we might just want to upsert details.
             $new_count = (int)$row['order_count'];
             if ($order_total > 0) $new_count++;
             
