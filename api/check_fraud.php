@@ -22,9 +22,11 @@ include 'db.php';
 
 // --- CONFIGURATION & HELPERS ---
 
-$cookieDir = sys_get_temp_dir() . '/bdc_cookies';
+// Use a local directory for cookies
+$cookieDir = __DIR__ . '/cookies';
 if (!file_exists($cookieDir)) {
     @mkdir($cookieDir, 0755, true);
+    @file_put_contents($cookieDir . '/index.php', '<?php // Silence is golden');
 }
 
 function getSetting($conn, $key) {
@@ -47,11 +49,22 @@ function saveSetting($conn, $key, $value) {
     $stmt->execute();
 }
 
+function getRandomUserAgent() {
+    $agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/120.0.0.0'
+    ];
+    return $agents[array_rand($agents)];
+}
+
 function make_request($url, $method = 'GET', $params = [], $cookie_file = null) {
     $ch = curl_init();
     
     $defaultHeaders = [
-        'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent: ' . getRandomUserAgent(),
         'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
         'Accept-Language: en-US,en;q=0.9',
         'Cache-Control: no-cache',
@@ -136,14 +149,11 @@ if (!$forceRefresh) {
         $cancelled = 0;
         $breakdown = [];
 
-        // Check if cache format is new (object) or old (array)
         if (isset($cacheData['delivered']) && isset($cacheData['breakdown'])) {
-            // New Format
             $delivered = (int)$cacheData['delivered'];
             $cancelled = (int)$cacheData['cancelled'];
             $breakdown = $cacheData['breakdown'];
         } else if (is_array($cacheData)) {
-            // Legacy Format: Parse breakdown strings "Del: X | Can: Y"
             $breakdown = $cacheData;
             foreach ($breakdown as $item) {
                 if (isset($item['status']) && preg_match('/Del:\s*(\d+).*?Can:\s*(\d+)/', $item['status'], $matches)) {
@@ -182,27 +192,30 @@ $steadfastConfig = getSetting($conn, 'courier_config');
 $pathaoConfig = getSetting($conn, 'pathao_config');
 $redxConfig = getSetting($conn, 'redx_config');
 
-// STEADFAST LOGIC (With Retry)
+// STEADFAST LOGIC
 if ($steadfastConfig && !empty($steadfastConfig['email']) && !empty($steadfastConfig['password'])) {
     
     $cookieFile = $cookieDir . '/sf_' . md5($steadfastConfig['email']) . '.txt';
     $attempts = 0;
     $success = false;
 
-    // Retry loop for Steadfast login issues
     while ($attempts < 2 && !$success) {
         $attempts++;
         $isLoggedIn = false;
 
-        // Check cache file
+        // Check cache file age
         if (file_exists($cookieFile) && (time() - filemtime($cookieFile) < 2700)) {
             $isLoggedIn = true;
         }
 
         if (!$isLoggedIn) {
+            // Add slight delay to prevent rate limiting
+            if ($attempts > 1) sleep(1);
+
             $resInit = make_request("https://steadfast.com.bd/login", 'GET', [], $cookieFile);
             if (preg_match('/<input type="hidden" name="_token" value="(.*?)"/', $resInit['body'], $matches)) {
                 $token = $matches[1];
+                
                 $loginRes = make_request("https://steadfast.com.bd/login", 'POST', [
                     'body' => [
                         '_token' => $token,
@@ -218,6 +231,8 @@ if ($steadfastConfig && !empty($steadfastConfig['email']) && !empty($steadfastCo
 
                 if (strpos($loginRes['url'], '/dashboard') !== false || strpos($loginRes['body'], 'Dashboard') !== false) {
                     $isLoggedIn = true;
+                } else {
+                    $history['debug'][] = "Steadfast: Login failed on attempt $attempts";
                 }
             }
         }
@@ -235,44 +250,57 @@ if ($steadfastConfig && !empty($steadfastConfig['email']) && !empty($steadfastCo
                 $s_can = isset($data['total_cancelled']) ? (int)$data['total_cancelled'] : 0;
                 $s_tot = $s_del + $s_can;
 
-                if ($s_tot >= 0) { // Valid response even if 0
+                if ($s_tot >= 0) {
                     $history['delivered'] += $s_del;
                     $history['cancelled'] += $s_can;
                     $history['total'] += $s_tot;
                     if ($s_tot > 0) {
                         $history['breakdown'][] = ['courier' => 'Steadfast', 'status' => "Del: $s_del | Can: $s_can"];
                     }
-                    $success = true; // Break loop
+                    $success = true;
                 }
             } else {
-                // If invalid response, force logout and retry
+                // Session potentially expired, delete cookie to force login on next loop/request
                 @unlink($cookieFile);
-                $history['debug'][] = "Steadfast: Failed attempt $attempts, clearing cookie";
+                $history['debug'][] = "Steadfast: Invalid JSON/Session, retrying...";
             }
         }
     }
 }
 
-// PATHAO LOGIC
+// PATHAO LOGIC - FIXED AUTO REFRESH
 if ($pathaoConfig && !empty($pathaoConfig['username']) && !empty($pathaoConfig['password'])) {
     
     $pSession = getSetting($conn, 'pathao_merchant_token');
     $accessToken = $pSession['token'] ?? '';
     $expiry = $pSession['expiry'] ?? 0;
+    
+    $needsAuth = true;
 
-    if (!$accessToken || time() > $expiry) {
+    // Helper to get token
+    function getPathaoToken($config) {
         $loginRes = make_request("https://merchant.pathao.com/api/v1/login", 'POST', [
             'headers' => ['Content-Type: application/json'],
             'body' => [
-                'username' => $pathaoConfig['username'],
-                'password' => $pathaoConfig['password']
+                'username' => $config['username'],
+                'password' => $config['password']
             ]
         ]);
-
         $authData = json_decode($loginRes['body'], true);
         if (isset($authData['access_token'])) {
-            $accessToken = $authData['access_token'];
-            saveSetting($conn, 'pathao_merchant_token', ['token' => $accessToken, 'expiry' => time() + 20000]); 
+            return $authData['access_token'];
+        }
+        return null;
+    }
+
+    if ($accessToken && time() < $expiry) {
+        $needsAuth = false;
+    }
+
+    if ($needsAuth) {
+        $accessToken = getPathaoToken($pathaoConfig);
+        if ($accessToken) {
+            saveSetting($conn, 'pathao_merchant_token', ['token' => $accessToken, 'expiry' => time() + 20000]);
         }
     }
 
@@ -288,6 +316,24 @@ if ($pathaoConfig && !empty($pathaoConfig['username']) && !empty($pathaoConfig['
 
         $pData = json_decode($resCheck['body'], true);
         
+        // Handle Token Expiry on the fly (401)
+        if ($resCheck['code'] == 401) {
+            $history['debug'][] = "Pathao: Token expired, refreshing...";
+            $accessToken = getPathaoToken($pathaoConfig);
+            if ($accessToken) {
+                saveSetting($conn, 'pathao_merchant_token', ['token' => $accessToken, 'expiry' => time() + 20000]);
+                // Retry request with new token
+                $resCheck = make_request($checkUrl, 'POST', [
+                    'headers' => [
+                        'Content-Type: application/json',
+                        'Authorization: Bearer ' . $accessToken
+                    ],
+                    'body' => ['phone' => $phone]
+                ]);
+                $pData = json_decode($resCheck['body'], true);
+            }
+        }
+        
         if (isset($pData['data']['customer'])) {
             $cust = $pData['data']['customer'];
             $del = (int)($cust['successful_delivery'] ?? 0);
@@ -300,8 +346,6 @@ if ($pathaoConfig && !empty($pathaoConfig['username']) && !empty($pathaoConfig['
                 $history['total'] += $tot;
                 $history['breakdown'][] = ['courier' => 'Pathao', 'status' => "Del: $del | Can: $can"];
             }
-        } elseif ($resCheck['code'] == 401) {
-            saveSetting($conn, 'pathao_merchant_token', ['token' => '', 'expiry' => 0]);
         }
     }
 }

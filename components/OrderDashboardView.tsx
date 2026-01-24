@@ -4,12 +4,13 @@ import {
   Search, 
   ChevronDown, 
   Eye, 
-  Trash2,
-  X,
+  Trash2, 
+  X, 
   ShieldCheck,
   Loader2,
   CheckCircle,
-  AlertTriangle
+  AlertTriangle,
+  HelpCircle
 } from 'lucide-react';
 import { Order, WCStatus } from '../types';
 import { CustomDatePicker } from './CustomDatePicker';
@@ -51,6 +52,21 @@ const FraudStatus: React.FC<{ phone: string }> = ({ phone }) => {
           <button onClick={checkFraud} className="text-gray-400 hover:text-blue-600 transition-colors p-1" title="Check Delivery History">
               <ShieldCheck size={18} className="mx-auto" />
           </button>
+      );
+  }
+
+  // Handle case where no data was found (0 orders)
+  if (data.total_orders === 0) {
+      return (
+          <div className="relative group inline-flex items-center gap-1 px-2 py-1 rounded border text-[10px] font-bold text-gray-500 bg-gray-50 border-gray-200 cursor-default">
+              <HelpCircle size={10} />
+              No Data
+              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-32 bg-gray-800 text-white text-[10px] p-2 rounded shadow-xl hidden group-hover:block z-50 text-center pointer-events-none">
+                  <div className="font-bold pb-1 mb-1 text-xs">No History</div>
+                  <div className="text-gray-300">No previous orders found for this number.</div>
+                  <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-gray-800"></div>
+              </div>
+          </div>
       );
   }
 
@@ -353,3 +369,4 @@ export const OrderDashboardView: React.FC<OrderDashboardViewProps> = ({ orders, 
     </div>
   );
 };
+    
