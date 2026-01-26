@@ -3,7 +3,7 @@
  * Plugin Name: BdCommerce SMS Manager
  * Plugin URI:  https://bdcommerce.com
  * Description: A complete SMS & Customer Management solution. Sync customers and send Bulk SMS by relaying requests through your Main Dashboard. Includes Live Capture & Fraud Check in Orders.
- * Version:     2.4.0
+ * Version:     2.4.1
  * Author:      BdCommerce
  * License:     GPL2
  */
@@ -15,6 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 class BDC_SMS_Manager {
 
     private $table_name;
+    private $license_error = '';
 
     public function __construct() {
         global $wpdb;
@@ -34,6 +35,10 @@ class BDC_SMS_Manager {
         add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
         add_action( 'admin_notices', array( $this, 'license_check_notice' ) );
         
+        // Cache Clearing Hooks (Fix for activation issue)
+        add_action( 'update_option_bdc_license_key', array( $this, 'clear_license_cache' ), 10, 2 );
+        add_action( 'update_option_bdc_dashboard_url', array( $this, 'clear_license_cache' ), 10, 2 );
+
         // AJAX Handlers
         add_action( 'wp_ajax_bdc_sync_customers', array( $this, 'ajax_sync_customers' ) );
         add_action( 'wp_ajax_bdc_send_sms', array( $this, 'ajax_send_sms' ) );
@@ -62,20 +67,38 @@ class BDC_SMS_Manager {
     }
 
     /**
+     * Clear Cache when settings change
+     */
+    public function clear_license_cache($old_value, $new_value) {
+        // Delete all possible transient variations or specific one if key is known
+        global $wpdb;
+        $wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_bdc_license_status_%'" );
+        $wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_timeout_bdc_license_status_%'" );
+    }
+
+    /**
      * Check License Logic
      * Returns true if valid, false if not. Caches result for 12 hours.
      */
     private function is_license_active() {
         $license_key = get_option('bdc_license_key');
+        $license_key = trim($license_key); // Ensure no spaces
         if ( empty($license_key) ) return false;
 
-        $cached_status = get_transient('bdc_license_status_' . md5($license_key));
+        $cache_key = 'bdc_license_status_' . md5($license_key);
+        $cached_status = get_transient($cache_key);
+        
         if ( false !== $cached_status ) {
-            return $cached_status === 'valid';
+            if($cached_status === 'valid') return true;
+            // If invalid, we still re-check occasionally or return false
+            // But relying on hook to clear cache on update makes this safe
         }
 
         $api_base = $this->get_api_base_url();
-        if ( ! $api_base ) return false;
+        if ( ! $api_base ) {
+            $this->license_error = 'Dashboard URL is missing.';
+            return false;
+        }
 
         $response = wp_remote_post( $api_base . '/verify_license.php', array(
             'body' => json_encode(array(
@@ -83,20 +106,25 @@ class BDC_SMS_Manager {
                 'domain' => site_url()
             )),
             'headers' => array('Content-Type' => 'application/json'),
-            'timeout' => 10, 'sslverify' => false
+            'timeout' => 15, 
+            'sslverify' => false
         ));
 
-        if ( is_wp_error( $response ) ) return false;
+        if ( is_wp_error( $response ) ) {
+            $this->license_error = 'Connection Error: ' . $response->get_error_message();
+            return false;
+        }
 
         $body = wp_remote_retrieve_body( $response );
         $data = json_decode( $body, true );
 
         if ( isset($data['valid']) && $data['valid'] === true ) {
-            set_transient('bdc_license_status_' . md5($license_key), 'valid', 12 * HOUR_IN_SECONDS);
+            set_transient($cache_key, 'valid', 12 * HOUR_IN_SECONDS);
             return true;
         }
 
-        set_transient('bdc_license_status_' . md5($license_key), 'invalid', 12 * HOUR_IN_SECONDS);
+        $this->license_error = isset($data['message']) ? $data['message'] : 'Invalid Key Response';
+        set_transient($cache_key, 'invalid', 12 * HOUR_IN_SECONDS);
         return false;
     }
 
@@ -104,7 +132,8 @@ class BDC_SMS_Manager {
         $screen = get_current_screen();
         if ( $screen && $screen->id === 'toplevel_page_bdc-sms-manager' ) {
             if ( ! $this->is_license_active() ) {
-                echo '<div class="notice notice-error"><p><strong>License Inactive:</strong> Please enter a valid License Key in Settings tab to enable SMS and Fraud Guard features.</p></div>';
+                $error_msg = $this->license_error ? " ($this->license_error)" : "";
+                echo '<div class="notice notice-error"><p><strong>License Inactive:</strong> Please enter a valid License Key in Settings tab.' . esc_html($error_msg) . '</p></div>';
             }
         }
     }
