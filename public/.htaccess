@@ -1,0 +1,15 @@
+# Disable Directory Browsing (Fixes the file list issue)
+Options -Indexes
+
+# Protect Hidden Files (like .env, .git)
+<FilesMatch "^\.">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# CORS Headers (Allows your dashboard to access the API)
+<IfModule mod_headers.c>
+    Header set Access-Control-Allow-Origin "*"
+    Header set Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE"
+    Header set Access-Control-Allow-Headers "Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With, Api-Key, Secret-Key"
+</IfModule>

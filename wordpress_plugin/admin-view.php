@@ -4,11 +4,6 @@ $is_connected = isset($is_connected) ? $is_connected : false;
 $is_licensed = isset($is_licensed) ? $is_licensed : false;
 $dashboard_url = get_option( 'bdc_dashboard_url' );
 $license_key = get_option( 'bdc_license_key' );
-$mask_key = $license_key ? substr($license_key, 0, 8) . '••••••' . substr($license_key, -8) : '';
-
-// Get Balance (This would ideally come from an API call or transient)
-$balance = 0; // Default
-// Assuming balance is fetched via JS or stored locally in future updates
 ?>
 
 <!-- Google Fonts -->
@@ -20,7 +15,7 @@ $balance = 0; // Default
         font-family: 'Inter', sans-serif;
         background-color: #F8F9FB;
         color: #334155;
-        margin: 0 -20px 0 -20px; /* Counteract WP padding */
+        margin: 0 -20px 0 -20px;
         padding: 40px;
         min-height: 100vh;
         box-sizing: border-box;
@@ -30,14 +25,15 @@ $balance = 0; // Default
     /* Top Navigation Tabs */
     .bdc-nav {
         display: flex;
-        gap: 30px;
-        margin-bottom: 40px;
+        gap: 10px;
+        margin-bottom: 30px;
         background: #fff;
-        padding: 15px 30px;
+        padding: 10px 20px;
         border-radius: 12px;
         box-shadow: 0 2px 5px rgba(0,0,0,0.02);
         border: 1px solid #e2e8f0;
         overflow-x: auto;
+        white-space: nowrap;
     }
     .bdc-nav-item {
         text-decoration: none;
@@ -45,16 +41,22 @@ $balance = 0; // Default
         font-size: 13px;
         font-weight: 500;
         cursor: pointer;
-        padding-bottom: 2px;
-        white-space: nowrap;
+        padding: 10px 15px;
+        border-radius: 8px;
         transition: all 0.2s;
+        display: inline-block;
     }
-    .bdc-nav-item:hover { color: #2563eb; }
+    .bdc-nav-item:hover { background-color: #f1f5f9; color: #0f172a; }
     .bdc-nav-item.active {
+        background-color: #eff6ff;
         color: #2563eb;
         font-weight: 600;
-        border-bottom: 2px solid #2563eb;
     }
+
+    /* Tab Content Logic */
+    .bdc-tab-content { display: none; animation: fadeIn 0.3s ease-in-out; }
+    .bdc-tab-content.active { display: block; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
     /* Grid Layout */
     .bdc-grid {
@@ -79,287 +81,266 @@ $balance = 0; // Default
 
     /* Section Title */
     .bdc-section-title {
-        font-size: 18px;
+        font-size: 20px;
         font-weight: 700;
         color: #0f172a;
-        margin-bottom: 25px;
+        margin-bottom: 20px;
         display: block;
     }
 
-    /* API Status Block */
-    .bdc-status-block {
-        display: flex;
-        align-items: flex-start;
-        gap: 15px;
-        margin-bottom: 25px;
-    }
-    .bdc-check-icon {
-        width: 40px;
-        height: 40px;
-        background: #22c55e;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: white;
-        font-size: 20px;
-        flex-shrink: 0;
-    }
+    /* Status Block */
+    .bdc-status-block { display: flex; align-items: flex-start; gap: 15px; margin-bottom: 25px; }
+    .bdc-check-icon { width: 40px; height: 40px; background: #22c55e; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 20px; flex-shrink: 0; }
     .bdc-status-info h3 { margin: 0 0 5px; font-size: 16px; font-weight: 700; color: #1e293b; }
     .bdc-status-info p { margin: 0; font-size: 13px; color: #64748b; }
-    
-    .bdc-badge-active {
-        background: #dcfce7;
-        color: #15803d;
-        font-size: 10px;
-        font-weight: 700;
-        padding: 4px 8px;
-        border-radius: 6px;
-        text-transform: uppercase;
-        margin-left: auto;
-    }
-    .bdc-badge-inactive {
-        background: #fee2e2;
-        color: #991b1b;
-        font-size: 10px;
-        font-weight: 700;
-        padding: 4px 8px;
-        border-radius: 6px;
-        text-transform: uppercase;
-        margin-left: auto;
-    }
+    .bdc-badge-active { background: #dcfce7; color: #15803d; font-size: 10px; font-weight: 700; padding: 4px 8px; border-radius: 6px; text-transform: uppercase; margin-left: auto; }
+    .bdc-badge-inactive { background: #fee2e2; color: #991b1b; font-size: 10px; font-weight: 700; padding: 4px 8px; border-radius: 6px; text-transform: uppercase; margin-left: auto; }
 
-    /* Inputs */
-    .bdc-input-wrap {
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        padding: 12px 15px;
-        margin-bottom: 20px;
-        font-family: monospace;
-        color: #334155;
-        font-size: 14px;
-        display: flex;
-        align-items: center;
-    }
-    .bdc-input-field {
-        width: 100%;
-        background: transparent;
-        border: none;
-        outline: none;
-        font-family: inherit;
-        color: inherit;
-    }
+    /* Forms */
+    .bdc-input-wrap { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 15px; margin-bottom: 20px; display: flex; align-items: center; }
+    .bdc-input-field { width: 100%; background: transparent; border: none; outline: none; font-family: monospace; color: #334155; }
+    
+    .bdc-setting-row { display: flex; align-items: center; justify-content: space-between; padding: 15px 0; border-bottom: 1px solid #f1f5f9; }
+    .bdc-setting-row:last-child { border-bottom: none; }
+    .bdc-setting-label h4 { margin: 0 0 5px; font-size: 14px; font-weight: 600; color: #1e293b; }
+    .bdc-setting-label p { margin: 0; font-size: 12px; color: #64748b; }
+    
+    /* Toggle Switch */
+    .bdc-switch { position: relative; display: inline-block; width: 44px; height: 24px; }
+    .bdc-switch input { opacity: 0; width: 0; height: 0; }
+    .bdc-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #cbd5e1; transition: .4s; border-radius: 24px; }
+    .bdc-slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+    input:checked + .bdc-slider { background-color: #2563eb; }
+    input:checked + .bdc-slider:before { transform: translateX(20px); }
 
     /* Buttons */
-    .bdc-btn {
-        width: 100%;
-        padding: 12px;
-        border-radius: 8px;
-        font-weight: 600;
-        font-size: 14px;
-        cursor: pointer;
-        border: none;
-        transition: all 0.2s;
-        text-align: center;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        text-decoration: none;
-    }
-    .bdc-btn-dark { background: #334155; color: white; }
-    .bdc-btn-dark:hover { background: #1e293b; }
-    .bdc-btn-primary { background: #6366f1; color: white; background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); }
-    .bdc-btn-primary:hover { opacity: 0.9; }
-
-    /* Promo Box */
-    .bdc-promo {
-        background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
-        border-radius: 12px;
-        padding: 25px;
-        color: white;
-        margin-top: 30px;
-        text-align: left;
-    }
-    .bdc-promo h4 { margin: 0 0 10px; font-size: 16px; font-weight: 700; }
-    .bdc-promo p { margin: 0 0 20px; font-size: 13px; opacity: 0.9; line-height: 1.5; }
-    .bdc-btn-promo {
-        background: rgba(255,255,255,0.2);
-        color: white;
-        width: auto;
-        padding: 10px 20px;
-        border: 1px solid rgba(255,255,255,0.3);
-    }
-    .bdc-btn-promo:hover { background: rgba(255,255,255,0.3); }
+    .bdc-btn { padding: 12px 20px; border-radius: 8px; font-weight: 600; font-size: 14px; cursor: pointer; border: none; transition: all 0.2s; text-align: center; display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none; }
+    .bdc-btn-dark { background: #334155; color: white; width: 100%; }
+    .bdc-btn-primary { background: #2563eb; color: white; border: none; }
+    .bdc-btn-primary:hover { background: #1d4ed8; }
 
     /* List Items */
-    .bdc-list-item {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 15px;
-        background: #f8fafc;
-        border-radius: 8px;
-        margin-bottom: 15px;
-    }
+    .bdc-list-item { display: flex; align-items: center; justify-content: space-between; padding: 15px; background: #f8fafc; border-radius: 8px; margin-bottom: 15px; }
     .bdc-list-left { display: flex; align-items: center; gap: 12px; }
-    .bdc-icon-box {
-        width: 32px; height: 32px; border-radius: 50%;
-        display: flex; align-items: center; justify-content: center; font-size: 14px;
-    }
+    .bdc-icon-box { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; }
     .icon-blue { background: #eff6ff; color: #3b82f6; }
-    .icon-orange { background: #fff7ed; color: #f97316; }
     .icon-green { background: #f0fdf4; color: #22c55e; }
-    .icon-gray { background: #f1f5f9; color: #64748b; }
     
     .bdc-list-label { font-size: 13px; font-weight: 500; color: #64748b; }
     .bdc-list-value { font-size: 13px; font-weight: 600; color: #334155; }
-    
-    .bdc-add-btn {
-        font-size: 11px; font-weight: 700; color: #0f172a; cursor: pointer; text-decoration: none;
-        display: flex; align-items: center; gap: 4px;
-    }
-
-    /* Modal */
-    .bdc-modal-overlay {
-        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-        background: rgba(0,0,0,0.5); z-index: 99999;
-        display: none; align-items: center; justify-content: center;
-    }
-    .bdc-modal-wrap {
-        background: white; width: 400px; padding: 30px; border-radius: 16px;
-        box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1);
-        position: relative;
-    }
-    .bdc-close-modal { position: absolute; top: 15px; right: 15px; cursor: pointer; font-size: 20px; color: #94a3b8; }
-    
-    /* Footer Button */
-    .bdc-footer-btn {
-        margin-top: 40px;
-        text-align: left;
-    }
-    .wp-core-ui .button-primary.bdc-save-btn {
-        background: #4f46e5;
-        border-color: #4f46e5;
-        padding: 8px 25px;
-        font-size: 14px;
-        font-weight: 600;
-        border-radius: 6px;
-        height: auto;
-    }
 </style>
 
 <div class="bdc-wrap">
     
-    <!-- Title -->
-    <h1 class="bdc-section-title">API Key Settings</h1>
+    <h1 class="bdc-section-title">Plugin Settings</h1>
 
-    <!-- Tabs -->
+    <!-- TABS Navigation -->
     <div class="bdc-nav">
-        <a href="#api" class="bdc-nav-item active">API Settings</a>
-        <a href="#phone" class="bdc-nav-item">Phone Validation</a>
-        <a href="#otp" class="bdc-nav-item">OTP Settings</a>
-        <a href="#courier" class="bdc-nav-item">Courier Report</a>
-        <a href="#filter" class="bdc-nav-item">Smart Order Filter</a>
-        <a href="#vpn" class="bdc-nav-item">VPN Block</a>
-        <a href="#fraud" class="bdc-nav-item">Fraud Detection</a>
-        <a href="#incomplete" class="bdc-nav-item">Incomplete Orders</a>
+        <div class="bdc-nav-item active" data-target="api">API Settings</div>
+        <div class="bdc-nav-item" data-target="phone">Phone Validation</div>
+        <div class="bdc-nav-item" data-target="otp">OTP Settings</div>
+        <div class="bdc-nav-item" data-target="courier">Courier Report</div>
+        <div class="bdc-nav-item" data-target="filter">Smart Order Filter</div>
+        <div class="bdc-nav-item" data-target="vpn">VPN Block</div>
+        <div class="bdc-nav-item" data-target="fraud">Fraud Detection</div>
+        <div class="bdc-nav-item" data-target="incomplete">Incomplete Orders</div>
     </div>
 
-    <div class="bdc-grid">
-        
-        <!-- Left Card: API Connection -->
-        <div class="bdc-card">
-            <div class="bdc-status-block">
-                <?php if ($is_licensed): ?>
-                    <div class="bdc-check-icon"><span class="dashicons dashicons-yes"></span></div>
-                    <div class="bdc-status-info">
-                        <h3>API Key Connected</h3>
-                        <p>Your API key is connected and working properly</p>
-                    </div>
-                    <span class="bdc-badge-active">ACTIVE</span>
-                <?php else: ?>
-                    <div class="bdc-check-icon" style="background:#ef4444;"><span class="dashicons dashicons-no"></span></div>
-                    <div class="bdc-status-info">
-                        <h3>Not Connected</h3>
-                        <p>Please enter your license key below.</p>
-                    </div>
-                    <span class="bdc-badge-inactive">INACTIVE</span>
-                <?php endif; ?>
-            </div>
+    <form method="post" action="options.php">
+        <?php settings_fields( 'bdc_sms_group' ); ?>
+        <?php settings_fields( 'bdc_fraud_group' ); ?>
 
-            <form method="post" action="options.php">
-                <?php settings_fields( 'bdc_sms_group' ); ?>
-                
-                <div class="bdc-input-wrap">
-                    <input type="text" name="bdc_license_key" value="<?php echo esc_attr( get_option( 'bdc_license_key' ) ); ?>" class="bdc-input-field" placeholder="BDC-xxxxxxxx" id="licenseField">
+        <!-- TAB 1: API Settings -->
+        <div id="content-api" class="bdc-tab-content active">
+            <div class="bdc-grid">
+                <!-- API Connection Card -->
+                <div class="bdc-card">
+                    <div class="bdc-status-block">
+                        <?php if ($is_licensed): ?>
+                            <div class="bdc-check-icon"><span class="dashicons dashicons-yes"></span></div>
+                            <div class="bdc-status-info">
+                                <h3>API Key Connected</h3>
+                                <p>Your API key is connected and working properly</p>
+                            </div>
+                            <span class="bdc-badge-active">ACTIVE</span>
+                        <?php else: ?>
+                            <div class="bdc-check-icon" style="background:#ef4444;"><span class="dashicons dashicons-no"></span></div>
+                            <div class="bdc-status-info">
+                                <h3>Not Connected</h3>
+                                <p>Please enter your license key below.</p>
+                            </div>
+                            <span class="bdc-badge-inactive">INACTIVE</span>
+                        <?php endif; ?>
+                    </div>
+
+                    <div class="bdc-input-wrap">
+                        <input type="text" name="bdc_license_key" value="<?php echo esc_attr( get_option( 'bdc_license_key' ) ); ?>" class="bdc-input-field" placeholder="BDC-xxxxxxxx">
+                    </div>
+                    
+                    <input type="hidden" name="bdc_dashboard_url" value="<?php echo esc_attr( get_option( 'bdc_dashboard_url' ) ); ?>">
+
+                    <button type="submit" class="bdc-btn bdc-btn-dark">
+                        <span class="dashicons dashicons-saved"></span> Save Configuration
+                    </button>
                 </div>
-                
-                <!-- Hidden Fields required for settings to save properly if not edited -->
-                <input type="hidden" name="bdc_dashboard_url" value="<?php echo esc_attr( get_option( 'bdc_dashboard_url' ) ); ?>">
 
-                <button type="submit" class="bdc-btn bdc-btn-dark">
-                    <span class="dashicons dashicons-edit"></span> <?php echo $is_licensed ? 'Change API Key' : 'Connect API Key'; ?>
-                </button>
-            </form>
+                <!-- Subscription Status Card -->
+                <div class="bdc-card">
+                    <h3 style="font-size:16px; font-weight:700; margin:0 0 20px 0;">Subscription Status</h3>
+                    
+                    <div class="bdc-list-item">
+                        <div class="bdc-list-left">
+                            <div class="bdc-icon-box icon-blue"><span class="dashicons dashicons-admin-site"></span></div>
+                            <span class="bdc-list-label">Domain</span>
+                        </div>
+                        <span class="bdc-list-value"><?php echo parse_url(site_url(), PHP_URL_HOST); ?></span>
+                    </div>
 
-            <div class="bdc-promo">
-                <h4>Thanks for Updating!</h4>
-                <p>We appreciate you for keeping your plugin up to date. 🎉 Join our community group to get exclusive coupon codes and stay connected.</p>
-                <a href="https://www.facebook.com/groups/bdcommerce" target="_blank" class="bdc-btn bdc-btn-promo">Join Group</a>
+                    <div class="bdc-list-item" style="background:#f0fdf4;">
+                        <div class="bdc-list-left">
+                            <div class="bdc-icon-box icon-green"><span class="dashicons dashicons-email"></span></div>
+                            <span class="bdc-list-label">SMS Balance</span>
+                        </div>
+                        <span class="bdc-list-value" id="sms-balance-display">Loading...</span>
+                    </div>
+
+                    <div style="margin-top:auto;">
+                        <a href="<?php echo $dashboard_url ? rtrim($dashboard_url, '/') . '/buy-sms' : '#'; ?>" target="_blank" class="bdc-btn bdc-btn-primary" style="width:100%;">
+                            <span class="dashicons dashicons-cart"></span> Recharge SMS
+                        </a>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <!-- Right Card: Subscription Status -->
-        <div class="bdc-card">
-            <h3 style="font-size:16px; font-weight:700; margin:0 0 20px 0;">Subscription Status</h3>
-            
-            <div class="bdc-list-item">
-                <div class="bdc-list-left">
-                    <div class="bdc-icon-box icon-blue"><span class="dashicons dashicons-admin-site"></span></div>
-                    <span class="bdc-list-label">Domain</span>
+        <!-- TAB 2: Phone Validation -->
+        <div id="content-phone" class="bdc-tab-content">
+            <div class="bdc-card" style="max-width: 800px;">
+                <h3 style="font-size:16px; font-weight:700; margin-bottom:20px;">Phone Number Validation</h3>
+                
+                <div class="bdc-setting-row">
+                    <div class="bdc-setting-label">
+                        <h4>Validate 11 Digits</h4>
+                        <p>Prevents users from entering phone numbers less or more than 11 digits at checkout.</p>
+                    </div>
+                    <label class="bdc-switch">
+                        <input type="checkbox" name="bdc_fraud_phone_validation" value="1" <?php checked(1, get_option('bdc_fraud_phone_validation'), true); ?>>
+                        <span class="bdc-slider"></span>
+                    </label>
                 </div>
-                <span class="bdc-list-value"><?php echo parse_url(site_url(), PHP_URL_HOST); ?></span>
-            </div>
-
-            <div class="bdc-list-item" style="background:#fff7ed;">
-                <div class="bdc-list-left">
-                    <div class="bdc-icon-box icon-orange"><span class="dashicons dashicons-clock"></span></div>
-                    <span class="bdc-list-label">Time Remaining</span>
+                
+                <div style="margin-top:20px;">
+                    <button type="submit" class="bdc-btn bdc-btn-primary">Save Settings</button>
                 </div>
-                <span class="bdc-list-value">Unlimited <span class="dashicons dashicons-info" style="font-size:12px; color:#f97316;"></span></span>
-            </div>
-
-            <div class="bdc-list-item" style="background:#f0fdf4;">
-                <div class="bdc-list-left">
-                    <div class="bdc-icon-box icon-green"><span class="dashicons dashicons-email"></span></div>
-                    <span class="bdc-list-label">SMS Balance</span>
-                </div>
-                <div style="display:flex; align-items:center; gap:10px;">
-                    <span class="bdc-list-value" style="color:#16a34a; font-size:16px;" id="sms-balance-display">...</span>
-                    <a href="<?php echo $dashboard_url ? rtrim($dashboard_url, '/') . '/buy-sms' : '#'; ?>" target="_blank" class="bdc-add-btn"><span class="dashicons dashicons-plus"></span> Add</a>
-                </div>
-            </div>
-
-            <div class="bdc-list-item">
-                <div class="bdc-list-left">
-                    <div class="bdc-icon-box icon-gray"><span class="dashicons dashicons-backup"></span></div>
-                    <span class="bdc-list-label">Last Updated</span>
-                </div>
-                <span class="bdc-list-value"><?php echo date("M d, Y h:i A"); ?></span>
-            </div>
-
-            <div style="margin-top:auto;">
-                <button class="bdc-btn bdc-btn-primary" onclick="window.location.reload()">
-                    <span class="dashicons dashicons-update"></span> Renew / Refresh
-                </button>
             </div>
         </div>
 
-    </div>
+        <!-- TAB 3: OTP Settings -->
+        <div id="content-otp" class="bdc-tab-content">
+            <div class="bdc-card" style="max-width: 800px;">
+                <h3 style="font-size:16px; font-weight:700; margin-bottom:20px;">OTP Verification</h3>
+                
+                <div class="bdc-setting-row">
+                    <div class="bdc-setting-label">
+                        <h4>Enable OTP for COD</h4>
+                        <p>Require SMS verification if the user selects Cash on Delivery.</p>
+                    </div>
+                    <label class="bdc-switch">
+                        <input type="checkbox" name="bdc_fraud_enable_otp" value="1" <?php checked(1, get_option('bdc_fraud_enable_otp'), true); ?>>
+                        <span class="bdc-slider"></span>
+                    </label>
+                </div>
 
-    <!-- Hidden Settings Modal (To allow configuring URL if needed) -->
+                <div style="margin-top:20px;">
+                    <button type="submit" class="bdc-btn bdc-btn-primary">Save Settings</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 4: Courier Report (Placeholder) -->
+        <div id="content-courier" class="bdc-tab-content">
+            <div class="bdc-card">
+                <div style="text-align:center; padding: 40px;">
+                    <span class="dashicons dashicons-chart-bar" style="font-size:40px; color:#cbd5e1;"></span>
+                    <h3 style="margin-top:10px; color:#64748b;">Courier Reporting</h3>
+                    <p style="color:#94a3b8;">This feature allows you to see delivery success rates directly in your order list.</p>
+                    <a href="<?php echo $dashboard_url; ?>" target="_blank" class="bdc-btn bdc-btn-primary" style="margin-top:20px; display:inline-flex;">View Full Report in Dashboard</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 5: Smart Order Filter (Placeholder) -->
+        <div id="content-filter" class="bdc-tab-content">
+            <div class="bdc-card">
+                <h3 style="font-size:16px; font-weight:700;">Smart Order Filter</h3>
+                <p style="font-size:13px; color:#64748b; margin-top:10px;">This module runs automatically to flag duplicate orders and incomplete addresses.</p>
+            </div>
+        </div>
+
+        <!-- TAB 6: VPN Block (Placeholder) -->
+        <div id="content-vpn" class="bdc-tab-content">
+            <div class="bdc-card">
+                <h3 style="font-size:16px; font-weight:700;">VPN & Proxy Blocker</h3>
+                <p style="font-size:13px; color:#64748b; margin-top:10px;">Automatically detects and restricts orders placed via VPN or Proxy IPs to prevent fraud.</p>
+            </div>
+        </div>
+
+        <!-- TAB 7: Fraud Detection -->
+        <div id="content-fraud" class="bdc-tab-content">
+            <div class="bdc-card" style="max-width: 800px;">
+                <h3 style="font-size:16px; font-weight:700; margin-bottom:20px;">Fraud Detection Settings</h3>
+                
+                <div class="bdc-setting-row">
+                    <div class="bdc-setting-label">
+                        <h4>Check Delivery History</h4>
+                        <p>Check customer's previous delivery success rate from global database.</p>
+                    </div>
+                    <label class="bdc-switch">
+                        <input type="checkbox" name="bdc_fraud_history_check" value="1" <?php checked(1, get_option('bdc_fraud_history_check'), true); ?>>
+                        <span class="bdc-slider"></span>
+                    </label>
+                </div>
+
+                <div class="bdc-setting-row">
+                    <div class="bdc-setting-label">
+                        <h4>Disable COD for Low Success Rate</h4>
+                        <p>If delivery success rate is below threshold, hide Cash on Delivery.</p>
+                    </div>
+                    <label class="bdc-switch">
+                        <input type="checkbox" name="bdc_fraud_disable_cod" value="1" <?php checked(1, get_option('bdc_fraud_disable_cod'), true); ?>>
+                        <span class="bdc-slider"></span>
+                    </label>
+                </div>
+
+                <div class="bdc-setting-row">
+                    <div class="bdc-setting-label">
+                        <h4>Minimum Success Rate (%)</h4>
+                        <p>Threshold to consider a customer "Safe". Default: 50%</p>
+                    </div>
+                    <input type="number" name="bdc_fraud_min_rate" value="<?php echo esc_attr(get_option('bdc_fraud_min_rate', 50)); ?>" style="width:80px; padding:5px; border:1px solid #e2e8f0; border-radius:6px;">
+                </div>
+
+                <div style="margin-top:20px;">
+                    <button type="submit" class="bdc-btn bdc-btn-primary">Save Settings</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 8: Incomplete Orders (Placeholder) -->
+        <div id="content-incomplete" class="bdc-tab-content">
+            <div class="bdc-card">
+                <div style="text-align:center; padding: 40px;">
+                    <span class="dashicons dashicons-cart" style="font-size:40px; color:#cbd5e1;"></span>
+                    <h3 style="margin-top:10px; color:#64748b;">Live Incomplete Orders</h3>
+                    <p style="color:#94a3b8;">See customers who filled out the checkout form but didn't click "Place Order". Recover lost sales.</p>
+                    <a href="<?php echo $dashboard_url; ?>" target="_blank" class="bdc-btn bdc-btn-primary" style="margin-top:20px; display:inline-flex;">View Leads in Dashboard</a>
+                </div>
+            </div>
+        </div>
+
+    </form>
+
+    <!-- Hidden Settings Modal (To allow configuring URL manually if needed) -->
     <div style="margin-top:40px; text-align:left;">
         <p style="font-size:12px; color:#94a3b8; cursor:pointer;" onclick="document.getElementById('adv-settings').style.display='block'">Advanced Configuration</p>
     </div>
@@ -374,6 +355,7 @@ $balance = 0; // Default
                     <label style="font-size:12px; font-weight:bold;">Dashboard URL</label>
                     <input type="text" name="bdc_dashboard_url" value="<?php echo esc_attr( get_option( 'bdc_dashboard_url' ) ); ?>" class="bdc-input-field" style="border:1px solid #ddd; padding:8px; border-radius:4px;">
                 </div>
+                <!-- Hidden License Key field to prevent overwriting with empty if only URL is saved here -->
                 <input type="hidden" name="bdc_license_key" value="<?php echo esc_attr( get_option( 'bdc_license_key' ) ); ?>">
                 <button type="submit" class="bdc-btn bdc-btn-dark">Save URL</button>
             </form>
@@ -382,10 +364,23 @@ $balance = 0; // Default
 
 </div>
 
-<!-- Scripts to handle dynamic data -->
+<!-- Scripts for Tabs & Data -->
 <script>
 jQuery(document).ready(function($) {
-    // Fetch SMS Balance dynamically via AJAX if API is connected
+    // Tab Switching Logic
+    $('.bdc-nav-item').on('click', function() {
+        var target = $(this).data('target');
+        
+        // Remove active class from all nav items and contents
+        $('.bdc-nav-item').removeClass('active');
+        $('.bdc-tab-content').removeClass('active');
+        
+        // Add active class to clicked item and target content
+        $(this).addClass('active');
+        $('#content-' + target).addClass('active');
+    });
+
+    // Fetch SMS Balance
     <?php if ($is_licensed && $api_base): ?>
     $.ajax({
         url: "<?php echo esc_url($api_base . '/manage_sms_balance.php'); ?>",
