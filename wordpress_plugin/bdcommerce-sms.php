@@ -3,7 +3,7 @@
  * Plugin Name: BdCommerce SMS Manager
  * Plugin URI:  https://bdcommerce.com
  * Description: A complete SMS & Customer Management solution. Sync customers and send Bulk SMS by relaying requests through your Main Dashboard. Includes Live Capture & Fraud Check in Orders.
- * Version:     2.4.1
+ * Version:     2.4.2
  * Author:      BdCommerce
  * License:     GPL2
  */
@@ -16,6 +16,7 @@ class BDC_SMS_Manager {
 
     private $table_name;
     private $license_error = '';
+    private $runtime_cache = null; // Store status for current request
 
     public function __construct() {
         global $wpdb;
@@ -35,7 +36,7 @@ class BDC_SMS_Manager {
         add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
         add_action( 'admin_notices', array( $this, 'license_check_notice' ) );
         
-        // Cache Clearing Hooks (Fix for activation issue)
+        // Cache Clearing Hooks
         add_action( 'update_option_bdc_license_key', array( $this, 'clear_license_cache' ), 10, 2 );
         add_action( 'update_option_bdc_dashboard_url', array( $this, 'clear_license_cache' ), 10, 2 );
 
@@ -70,7 +71,6 @@ class BDC_SMS_Manager {
      * Clear Cache when settings change
      */
     public function clear_license_cache($old_value, $new_value) {
-        // Delete all possible transient variations or specific one if key is known
         global $wpdb;
         $wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_bdc_license_status_%'" );
         $wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_timeout_bdc_license_status_%'" );
@@ -78,20 +78,27 @@ class BDC_SMS_Manager {
 
     /**
      * Check License Logic
-     * Returns true if valid, false if not. Caches result for 12 hours.
+     * @param bool $force_check If true, ignores cache and calls API immediately.
      */
-    private function is_license_active() {
+    private function is_license_active($force_check = false) {
+        // Return runtime cache if available to prevent double API calls in one page load
+        if ($this->runtime_cache !== null && !$force_check) {
+            return $this->runtime_cache;
+        }
+
         $license_key = get_option('bdc_license_key');
-        $license_key = trim($license_key); // Ensure no spaces
+        $license_key = trim($license_key); 
         if ( empty($license_key) ) return false;
 
         $cache_key = 'bdc_license_status_' . md5($license_key);
-        $cached_status = get_transient($cache_key);
         
-        if ( false !== $cached_status ) {
-            if($cached_status === 'valid') return true;
-            // If invalid, we still re-check occasionally or return false
-            // But relying on hook to clear cache on update makes this safe
+        // Use Cache if not forced
+        if (!$force_check) {
+            $cached_status = get_transient($cache_key);
+            if ( false !== $cached_status ) {
+                $this->runtime_cache = ($cached_status === 'valid');
+                return $this->runtime_cache;
+            }
         }
 
         $api_base = $this->get_api_base_url();
@@ -106,7 +113,7 @@ class BDC_SMS_Manager {
                 'domain' => site_url()
             )),
             'headers' => array('Content-Type' => 'application/json'),
-            'timeout' => 15, 
+            'timeout' => 10, 
             'sslverify' => false
         ));
 
@@ -119,21 +126,26 @@ class BDC_SMS_Manager {
         $data = json_decode( $body, true );
 
         if ( isset($data['valid']) && $data['valid'] === true ) {
-            set_transient($cache_key, 'valid', 12 * HOUR_IN_SECONDS);
+            // Cache valid status for 30 minutes (Reduced from 12 hours)
+            set_transient($cache_key, 'valid', 30 * MINUTE_IN_SECONDS);
+            $this->runtime_cache = true;
             return true;
         }
 
         $this->license_error = isset($data['message']) ? $data['message'] : 'Invalid Key Response';
-        set_transient($cache_key, 'invalid', 12 * HOUR_IN_SECONDS);
+        // Cache invalid status for 30 minutes
+        set_transient($cache_key, 'invalid', 30 * MINUTE_IN_SECONDS);
+        $this->runtime_cache = false;
         return false;
     }
 
     public function license_check_notice() {
         $screen = get_current_screen();
+        // Force check when on plugin page to show real-time status
         if ( $screen && $screen->id === 'toplevel_page_bdc-sms-manager' ) {
-            if ( ! $this->is_license_active() ) {
+            if ( ! $this->is_license_active(true) ) {
                 $error_msg = $this->license_error ? " ($this->license_error)" : "";
-                echo '<div class="notice notice-error"><p><strong>License Inactive:</strong> Please enter a valid License Key in Settings tab.' . esc_html($error_msg) . '</p></div>';
+                echo '<div class="notice notice-error"><p><strong>License Inactive:</strong> Please enter a valid License Key in Settings tab to enable features.' . esc_html($error_msg) . '</p></div>';
             }
         }
     }
@@ -182,7 +194,7 @@ class BDC_SMS_Manager {
     public function register_settings() {
         // Main Config
         register_setting( 'bdc_sms_group', 'bdc_dashboard_url' );
-        register_setting( 'bdc_sms_group', 'bdc_license_key' ); // NEW
+        register_setting( 'bdc_sms_group', 'bdc_license_key' ); 
         
         // Fraud Guard Settings
         register_setting( 'bdc_fraud_group', 'bdc_fraud_phone_validation' ); 
@@ -196,8 +208,8 @@ class BDC_SMS_Manager {
      * FRAUD GUARD: Server Side Validation
      */
     public function execute_fraud_guard_checks() {
-        // License Check
-        if ( ! $this->is_license_active() ) return;
+        // Use cached license check for checkout speed (30 min validity)
+        if ( ! $this->is_license_active(false) ) return;
 
         $billing_phone = isset( $_POST['billing_phone'] ) ? $_POST['billing_phone'] : '';
         $clean_phone = preg_replace( '/[^0-9]/', '', $billing_phone );
@@ -248,7 +260,9 @@ class BDC_SMS_Manager {
     }
 
     public function ajax_send_otp() {
-        if ( ! $this->is_license_active() ) wp_send_json_error("License Inactive");
+        // Force check for OTP to prevent abuse, but rely on short cache for speed if needed
+        // Using false (cache) here for speed, assuming Fraud Guard passed.
+        if ( ! $this->is_license_active(false) ) wp_send_json_error("License Inactive");
 
         $phone = isset($_POST['phone']) ? sanitize_text_field($_POST['phone']) : '';
         if(!$phone) wp_send_json_error("Phone number required");
@@ -292,12 +306,9 @@ class BDC_SMS_Manager {
         }
     }
 
-    /**
-     * Enqueue Scripts and Styles
-     */
     public function enqueue_assets( $hook ) {
-        // Only load frontend scripts if license is active
-        if ( is_checkout() && $this->is_license_active() ) {
+        // Only load frontend scripts if license is active (Cached check)
+        if ( is_checkout() && $this->is_license_active(false) ) {
             $api_base = $this->get_api_base_url();
             if($api_base) {
                 $check_history = get_option('bdc_fraud_history_check') ? 'yes' : 'no';
@@ -307,7 +318,6 @@ class BDC_SMS_Manager {
 
                 wp_enqueue_script('jquery');
                 
-                // Professional Modal CSS - Updated Z-Index
                 $custom_css = "
                     .bdc-modal { position: fixed; z-index: 2147483647 !important; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; background-color: rgba(0,0,0,0.85); backdrop-filter: blur(5px); display: none; align-items:center; justify-content:center; }
                     .bdc-modal.show-modal { display: flex !important; }
@@ -526,7 +536,7 @@ EOD
             }
         }
 
-        // Admin Scripts (Existing)
+        // Admin Scripts
         $screen = get_current_screen();
         $is_order_page = ( 
             ( $hook === 'edit.php' && isset($_GET['post_type']) && $_GET['post_type'] === 'shop_order' ) || 
@@ -535,31 +545,13 @@ EOD
 
         if ( 'toplevel_page_bdc-sms-manager' === $hook || $is_order_page ) {
             
-            // Script for Fraud Check Column (Only on order list page)
-            if( $is_order_page && $this->is_license_active() ) {
-                // Add Professional Styles
+            if( $is_order_page && $this->is_license_active(false) ) {
                 wp_register_style( 'bdc-admin-styles', false );
                 wp_enqueue_style( 'bdc-admin-styles' );
                 $custom_css = "
-                    .column-bdc_fraud_check { 
-                        width: 260px !important; 
-                        min-width: 260px !important; 
-                    }
+                    .column-bdc_fraud_check { width: 260px !important; min-width: 260px !important; }
                     .bdc-fraud-wrapper { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-                    .bdc-fraud-result-card {
-                        background: #ffffff;
-                        border: 1px solid #e2e8f0;
-                        border-radius: 8px;
-                        padding: 12px;
-                        width: 100%;
-                        max-width: 240px;
-                        box-sizing: border-box;
-                        box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.05);
-                        margin-top: 5px;
-                        margin-bottom: 5px;
-                        position: relative;
-                        z-index: 10;
-                    }
+                    .bdc-fraud-result-card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; width: 100%; max-width: 240px; box-sizing: border-box; box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.05); margin-top: 5px; margin-bottom: 5px; position: relative; z-index: 10; }
                     .bdc-fraud-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
                     .bdc-rate-group { display: flex; flex-direction: column; }
                     .bdc-rate-label { font-size: 10px; font-weight: 700; text-transform: uppercase; color: #64748b; letter-spacing: 0.5px; margin-bottom: 2px; }
@@ -584,7 +576,6 @@ EOD
                 $api_base = $this->get_api_base_url();
                 if($api_base) {
                     $api_url = esc_url($api_base . '/check_fraud.php');
-                    
                     wp_add_inline_script('jquery', '
                         jQuery(document).ready(function($) {
                             function loadFraudData(container) {
@@ -697,8 +688,8 @@ EOD
     }
 
     private function get_remote_features( $force_refresh = false ) {
-        // License check wrapper
-        if ( ! $this->is_license_active() ) return [];
+        // License check wrapper (Cached 30 min)
+        if ( ! $this->is_license_active(false) ) return [];
 
         $api_base = $this->get_api_base_url();
         if ( ! $api_base ) return [];
@@ -757,7 +748,7 @@ EOD
 
     public function inject_live_capture_script() {
         if ( ! is_checkout() || is_order_received_page() ) return;
-        if ( ! $this->is_license_active() ) return;
+        if ( ! $this->is_license_active(false) ) return;
 
         $api_base = $this->get_api_base_url();
         if ( ! $api_base ) return;
@@ -839,7 +830,8 @@ EOD
 
     public function ajax_sync_customers() {
         check_ajax_referer( 'bdc_sms_nonce', 'nonce' );
-        if ( ! $this->is_license_active() ) wp_send_json_error("License Inactive");
+        // Force check for manual sync action
+        if ( ! $this->is_license_active(true) ) wp_send_json_error("License Inactive");
 
         if ( ! class_exists( 'WooCommerce' ) ) wp_send_json_error( 'WooCommerce is not installed.' );
         global $wpdb;
@@ -863,7 +855,8 @@ EOD
 
     public function ajax_send_sms() {
         check_ajax_referer( 'bdc_sms_nonce', 'nonce' );
-        if ( ! $this->is_license_active() ) wp_send_json_error("License Inactive");
+        // Force check for manual SMS sending to prevent unauthorized use
+        if ( ! $this->is_license_active(true) ) wp_send_json_error("License Inactive");
 
         $numbers = $_POST['numbers'] ?? [];
         $message = $_POST['message'] ?? '';
@@ -894,7 +887,8 @@ EOD
         global $wpdb;
         $customers = $wpdb->get_results( "SELECT * FROM $this->table_name ORDER BY id DESC" );
         $is_connected = $this->check_connection();
-        $is_licensed = $this->is_license_active();
+        // Force check on dashboard load to show current status
+        $is_licensed = $this->is_license_active(true);
         $features = $this->get_remote_features( true );
         include(plugin_dir_path(__FILE__) . 'admin-view.php');
     }
