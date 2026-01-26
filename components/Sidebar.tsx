@@ -13,7 +13,8 @@ import {
   ShoppingCart,
   Zap,
   Sliders,
-  Search
+  Search,
+  Key
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -306,7 +307,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ activePage, onNavigate, status
           }}
         />
 
-        {/* NEW: Phone Search */}
+        {/* License Manager */}
+        <SidebarItem 
+          icon={<Key size={18} />} 
+          label="License Manager" 
+          active={activePage === 'licenses'}
+          onClick={() => {
+            onNavigate('licenses');
+            setIsOrderOpen(false);
+            setIsProductsOpen(false);
+          }}
+        />
+
         <SidebarItem 
           icon={<Search size={18} />} 
           label="Phone Search" 

@@ -1,8 +1,16 @@
 <?php 
 // Allow access to variables from render_dashboard
 $is_connected = isset($is_connected) ? $is_connected : false;
+$is_licensed = isset($is_licensed) ? $is_licensed : false;
 $customers = isset($customers) ? $customers : [];
 $features = isset($features) ? $features : [];
+$dashboard_url = get_option( 'bdc_dashboard_url' );
+$api_base = '';
+if($dashboard_url) {
+    $clean_url = preg_replace('/\/[a-zA-Z0-9_-]+\.php$/', '', $dashboard_url);
+    $base_url = rtrim( $clean_url, '/' );
+    $api_base = (substr( $base_url, -3 ) === 'api') ? $base_url : $base_url . '/api';
+}
 
 // Helper to check feature status
 function is_feature_active($key, $features) {
@@ -76,6 +84,7 @@ $local_enable_otp = get_option('bdc_fraud_enable_otp');
     .bg-orange-soft { background: #fff7ed; color: #ea580c; }
     .bg-blue-soft { background: #eff6ff; color: #2563eb; }
     .bg-green-soft { background: #f0fdf4; color: #16a34a; }
+    .bg-purple-soft { background: #f3e8ff; color: #9333ea; }
     
     /* Main Container */
     .bdc-main-card {
@@ -160,6 +169,7 @@ $local_enable_otp = get_option('bdc_fraud_enable_otp');
     }
     .bdc-btn-primary { background: #ea580c; color: white; box-shadow: 0 2px 4px rgba(234, 88, 12, 0.2); }
     .bdc-btn-primary:hover { background: #c2410c; color: white; }
+    .bdc-btn-dark { background: #1e293b; color: white; }
     
     /* Inputs */
     .bdc-input {
@@ -244,6 +254,18 @@ $local_enable_otp = get_option('bdc_fraud_enable_otp');
     }
     .bdc-check-row:last-child { border-bottom: none; }
     .bdc-check-label { font-size: 13px; font-weight: 600; color: #475569; }
+
+    /* Search Result Styles */
+    .bdc-result-box {
+        margin-top: 20px;
+        background: #fff;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 20px;
+        display: none;
+    }
+    .bdc-big-stat { font-size: 32px; font-weight: 800; color: #1e293b; margin-bottom: 5px; }
+    .bdc-stat-label { font-size: 11px; text-transform: uppercase; color: #64748b; font-weight: 700; letter-spacing: 0.5px; }
 </style>
 
 <div class="bdc-dashboard">
@@ -254,13 +276,13 @@ $local_enable_otp = get_option('bdc_fraud_enable_otp');
             <p>Customer Synchronization & Marketing Suite</p>
         </div>
         <div>
-            <?php if($is_connected): ?>
+            <?php if($is_connected && $is_licensed): ?>
                 <div class="bdc-status-pill status-ok">
-                    <span class="dashicons dashicons-yes"></span> Connected to Dashboard
+                    <span class="dashicons dashicons-yes"></span> Connected & Licensed
                 </div>
             <?php else: ?>
                 <div class="bdc-status-pill status-err">
-                    <span class="dashicons dashicons-warning"></span> Not Connected
+                    <span class="dashicons dashicons-warning"></span> <?php echo $is_licensed ? 'Not Connected' : 'License Inactive'; ?>
                 </div>
             <?php endif; ?>
         </div>
@@ -278,18 +300,25 @@ $local_enable_otp = get_option('bdc_fraud_enable_otp');
         <div class="bdc-stat-card">
             <div class="bdc-stat-icon bg-orange-soft"><span class="dashicons dashicons-smartphone"></span></div>
             <div class="bdc-stat-info">
-                <h3>Active</h3>
+                <h3><?php echo $is_licensed ? 'Active' : 'Disabled'; ?></h3>
                 <span>SMS Gateway</span>
             </div>
         </div>
         <div class="bdc-stat-card">
             <div class="bdc-stat-icon bg-green-soft"><span class="dashicons dashicons-shield"></span></div>
             <div class="bdc-stat-info">
-                <h3><?php echo is_feature_active('fraud_guard', $features) ? 'ON' : 'OFF'; ?></h3>
+                <h3><?php echo (is_feature_active('fraud_guard', $features) && $is_licensed) ? 'ON' : 'OFF'; ?></h3>
                 <span>Fraud Guard</span>
             </div>
         </div>
     </div>
+
+    <?php if (!$is_licensed) : ?>
+    <div style="background: #fee2e2; border-left: 4px solid #dc2626; padding: 20px; margin-bottom: 20px; border-radius: 4px;">
+        <h3 style="margin: 0; color: #991b1b; font-size: 16px;">License Inactive</h3>
+        <p style="margin: 5px 0 0; color: #b91c1c;">Please enter a valid license key in the <strong>Settings</strong> tab to activate SMS and Fraud prevention features.</p>
+    </div>
+    <?php endif; ?>
 
     <!-- Main Content Card -->
     <div class="bdc-main-card">
@@ -297,6 +326,9 @@ $local_enable_otp = get_option('bdc_fraud_enable_otp');
         <div class="bdc-tabs">
             <button onclick="switchTab('customers')" id="tab-customers" class="bdc-tab-btn active">
                 <span class="dashicons dashicons-groups"></span> Customers
+            </button>
+            <button onclick="switchTab('search')" id="tab-search" class="bdc-tab-btn">
+                <span class="dashicons dashicons-search"></span> Global Search
             </button>
             <button onclick="switchTab('features')" id="tab-features" class="bdc-tab-btn">
                 <span class="dashicons dashicons-grid-view"></span> Features
@@ -313,7 +345,7 @@ $local_enable_otp = get_option('bdc_fraud_enable_otp');
         <div id="content-customers" class="bdc-content active">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px;">
                 <h2 style="font-size:18px; font-weight:700; color:#1e293b; margin:0;">Database Overview</h2>
-                <button id="sync-btn" class="bdc-btn bdc-btn-primary">
+                <button id="sync-btn" class="bdc-btn bdc-btn-primary" <?php echo !$is_licensed ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : ''; ?>>
                     <span class="dashicons dashicons-update"></span> Sync from WooCommerce
                 </button>
             </div>
@@ -356,6 +388,46 @@ $local_enable_otp = get_option('bdc_fraud_enable_otp');
             <?php if(count($customers) > 20): ?>
                 <div style="text-align:center; padding-top:15px; color:#64748b; font-size:12px;">Showing recent 20 of <?php echo count($customers); ?> customers</div>
             <?php endif; ?>
+        </div>
+
+        <!-- Content: Global Search -->
+        <div id="content-search" class="bdc-content">
+            <div style="max-width:600px; margin:0 auto;">
+                <div style="text-align:center; margin-bottom:30px;">
+                    <h2 style="font-size:24px; font-weight:800; color:#1e293b; margin-bottom:10px;">Global Courier Check</h2>
+                    <p style="color:#64748b;">Instantly check delivery success rates from Steadfast & Pathao.</p>
+                </div>
+
+                <div style="background:#fff; border:1px solid #e2e8f0; padding:20px; border-radius:12px; display:flex; gap:10px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.05);">
+                    <input type="text" id="search-phone" class="bdc-input" style="font-size:16px; padding:12px;" placeholder="Enter Phone (e.g. 017xxxxxxxx)">
+                    <button id="search-btn" class="bdc-btn bdc-btn-dark" style="padding:12px 25px;" <?php echo !$is_licensed ? 'disabled style="opacity:0.5;"' : ''; ?>>
+                        <span class="dashicons dashicons-search"></span> Check
+                    </button>
+                </div>
+
+                <div id="search-result" class="bdc-result-box">
+                    <div style="text-align:center; margin-bottom:20px;">
+                        <div id="result-badge" class="bdc-badge" style="display:inline-block; font-size:12px; padding:6px 12px; margin-bottom:15px;"></div>
+                        <div class="bdc-big-stat" id="result-rate">0%</div>
+                        <div class="bdc-stat-label">Delivery Success Rate</div>
+                    </div>
+                    
+                    <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px; text-align:center; background:#f8fafc; padding:15px; border-radius:8px;">
+                        <div>
+                            <div class="bdc-big-stat" style="font-size:20px;" id="result-total">0</div>
+                            <div class="bdc-stat-label">Total</div>
+                        </div>
+                        <div>
+                            <div class="bdc-big-stat" style="font-size:20px; color:#16a34a;" id="result-delivered">0</div>
+                            <div class="bdc-stat-label">Delivered</div>
+                        </div>
+                        <div>
+                            <div class="bdc-big-stat" style="font-size:20px; color:#dc2626;" id="result-cancelled">0</div>
+                            <div class="bdc-stat-label">Cancelled</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Content: Features -->
@@ -464,9 +536,9 @@ $local_enable_otp = get_option('bdc_fraud_enable_otp');
 
         <!-- Content: Send SMS -->
         <div id="content-send-sms" class="bdc-content">
-            <?php if(!$is_connected): ?>
+            <?php if(!$is_connected || !$is_licensed): ?>
                 <div style="background:#fee2e2; border-left:4px solid #ef4444; padding:15px; border-radius:4px; color:#991b1b;">
-                    <strong>API Disconnected:</strong> Please configure the Dashboard URL in settings first.
+                    <strong>Access Denied:</strong> Please configure Dashboard URL and Valid License Key.
                 </div>
             <?php else: ?>
                 <div style="display:grid; grid-template-columns: 1fr 1fr; gap:30px;">
@@ -505,6 +577,12 @@ $local_enable_otp = get_option('bdc_fraud_enable_otp');
                     <p style="font-size:12px; color:#64748b; margin-top:5px;">The URL where your main application is hosted.</p>
                 </div>
 
+                <div class="bdc-form-group">
+                    <label class="bdc-label">License Key</label>
+                    <input type="password" name="bdc_license_key" value="<?php echo esc_attr( get_option( 'bdc_license_key' ) ); ?>" class="bdc-input" placeholder="BDC-xxxxxxxx">
+                    <p style="font-size:12px; color:#64748b; margin-top:5px;">Enter the key provided in your Dashboard License Manager.</p>
+                </div>
+
                 <?php submit_button( 'Save Configuration', 'primary', 'submit', true, ['class' => 'bdc-btn bdc-btn-primary'] ); ?>
             </form>
         </div>
@@ -521,6 +599,14 @@ $local_enable_otp = get_option('bdc_fraud_enable_otp');
     }
 
     jQuery(document).ready(function($) {
+        var hash = window.location.hash;
+        if(hash) {
+            var tab = hash.replace('#', '');
+            if(document.getElementById('content-' + tab)) {
+                switchTab(tab);
+            }
+        }
+
         $('#select-all').on('change', function() {
             $('.customer-cb').prop('checked', $(this).prop('checked'));
             updateRecipients();
@@ -594,6 +680,58 @@ $local_enable_otp = get_option('bdc_fraud_enable_otp');
                     alert('Error: ' + res.data);
                 }
                 btn.text('Send Campaign').prop('disabled', false);
+            });
+        });
+
+        $('#search-btn').on('click', function() {
+            var phone = $('#search-phone').val();
+            var btn = $(this);
+            if(phone.length < 10) {
+                alert('Invalid Phone Number');
+                return;
+            }
+
+            btn.html('<span class="dashicons dashicons-update" style="animation:spin 2s infinite linear"></span> Checking...').prop('disabled', true);
+            $('#search-result').slideUp();
+
+            var apiUrl = "<?php echo esc_js($api_base); ?>/check_fraud.php";
+            if(!apiUrl) {
+                alert("API Config Missing");
+                btn.html('<span class="dashicons dashicons-search"></span> Check').prop('disabled', false);
+                return;
+            }
+
+            $.ajax({
+                url: apiUrl,
+                data: { phone: phone, refresh: 'true' },
+                dataType: "json",
+                success: function(data) {
+                    if(data.error) {
+                        alert(data.error);
+                    } else {
+                        var rate = parseFloat(data.success_rate);
+                        $('#result-rate').text(rate + '%');
+                        $('#result-total').text(data.total_orders);
+                        $('#result-delivered').text(data.delivered);
+                        $('#result-cancelled').text(data.cancelled);
+
+                        var badge = $('#result-badge');
+                        if(rate >= 80) {
+                            badge.text('Trusted Customer').removeClass('bdc-badge-gray').addClass('bdc-badge-success');
+                            $('#result-rate').css('color', '#16a34a');
+                        } else {
+                            badge.text('Risk / New').removeClass('bdc-badge-success').addClass('bdc-badge-gray');
+                            $('#result-rate').css('color', rate < 50 ? '#dc2626' : '#ca8a04');
+                        }
+                        
+                        $('#search-result').slideDown();
+                    }
+                    btn.html('<span class="dashicons dashicons-search"></span> Check').prop('disabled', false);
+                },
+                error: function() {
+                    alert("API Request Failed. Check CORS/Settings.");
+                    btn.html('<span class="dashicons dashicons-search"></span> Check').prop('disabled', false);
+                }
             });
         });
     });

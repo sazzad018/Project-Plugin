@@ -52,3 +52,14 @@ CREATE TABLE IF NOT EXISTS `fraud_check_cache` (
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`phone`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- License Manager Table
+CREATE TABLE IF NOT EXISTS `licenses` (
+  `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
+  `domain_name` varchar(255) NOT NULL,
+  `license_key` varchar(64) NOT NULL,
+  `status` enum('active','inactive') DEFAULT 'active',
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `license_key` (`license_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

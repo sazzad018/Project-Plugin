@@ -16,6 +16,7 @@ import { BuySMSView } from './components/BuySMSView';
 import { LeadsView } from './components/LeadsView';
 import { PluginControlView } from './components/PluginControlView';
 import { PhoneSearchView } from './components/PhoneSearchView';
+import { LicenseView } from './components/LicenseView';
 import { 
   DollarSign, 
   CreditCard, 
@@ -409,6 +410,8 @@ const App: React.FC = () => {
         return <LeadsView />;
       case 'plugin-control':
         return <PluginControlView />;
+      case 'licenses':
+        return <LicenseView />;
       case 'phone-search':
         return <PhoneSearchView />;
       default:
