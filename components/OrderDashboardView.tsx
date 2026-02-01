@@ -27,72 +27,69 @@ const formatWCStatus = (status: string) => {
 
 const FraudStatus: React.FC<{ phone: string }> = ({ phone }) => {
   const [data, setData] = useState<{success_rate: number, total_orders: number, delivered: number, cancelled: number} | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  const checkFraud = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setLoading(true);
-    try {
-        const res = await fetch(`api/check_fraud.php?phone=${phone}`);
-        const result = await res.json();
-        if (!result.error) {
-            setData(result);
-        }
-    } catch (e) {
-        console.error(e);
-    } finally {
-        setLoading(false);
-    }
-  };
+  useEffect(() => {
+    let isMounted = true;
+    const checkFraud = async () => {
+      try {
+          const res = await fetch(`api/check_fraud.php?phone=${phone}`);
+          const result = await res.json();
+          if (isMounted) {
+              if (!result.error) {
+                  setData(result);
+              } else {
+                  // Default to 0 if error or no data
+                  setData({ success_rate: 0, total_orders: 0, delivered: 0, cancelled: 0 });
+              }
+          }
+      } catch (e) {
+          console.error(e);
+          if (isMounted) setData({ success_rate: 0, total_orders: 0, delivered: 0, cancelled: 0 });
+      } finally {
+          if (isMounted) setLoading(false);
+      }
+    };
+    
+    checkFraud();
+    return () => { isMounted = false; };
+  }, [phone]);
 
-  if (loading) return <Loader2 className="animate-spin text-gray-400 mx-auto" size={16} />;
+  if (loading) return <span className="text-[10px] text-gray-400 italic animate-pulse">Checking...</span>;
 
-  if (!data) {
-      return (
-          <button onClick={checkFraud} className="text-gray-400 hover:text-blue-600 transition-colors p-1" title="Check Delivery History">
-              <ShieldCheck size={18} className="mx-auto" />
-          </button>
-      );
-  }
-
-  // Handle case where no data was found (0 orders)
-  if (data.total_orders === 0) {
-      return (
-          <div className="relative group inline-flex items-center gap-1 px-2 py-1 rounded border text-[10px] font-bold text-gray-500 bg-gray-50 border-gray-200 cursor-default">
-              <HelpCircle size={10} />
-              No Data
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-32 bg-gray-800 text-white text-[10px] p-2 rounded shadow-xl hidden group-hover:block z-50 text-center pointer-events-none">
-                  <div className="font-bold pb-1 mb-1 text-xs">No History</div>
-                  <div className="text-gray-300">No previous orders found for this number.</div>
-                  <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-gray-800"></div>
-              </div>
-          </div>
-      );
-  }
+  if (!data) return <span className="text-[10px] text-gray-400">N/A</span>;
 
   const rate = parseFloat(data.success_rate as any);
-  let color = 'text-orange-600 bg-orange-50 border-orange-100';
-  let Icon = AlertTriangle;
+  const isHighSuccess = rate >= 80;
+  const isLowSuccess = rate < 50;
+  const colorClass = isHighSuccess ? 'text-green-600' : (isLowSuccess ? 'text-red-600' : 'text-orange-500');
   
-  if (rate >= 80) {
-      color = 'text-green-600 bg-green-50 border-green-100';
-      Icon = CheckCircle;
-  } else if (rate < 50) {
-      color = 'text-red-600 bg-red-50 border-red-100';
-  }
-
   return (
-      <div className={`relative group inline-flex items-center gap-1 px-2 py-1 rounded border text-[10px] font-bold ${color} cursor-default`}>
-          <Icon size={10} />
-          {rate}%
-          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-32 bg-gray-800 text-white text-[10px] p-2 rounded shadow-xl hidden group-hover:block z-50 text-center pointer-events-none">
-              <div className="font-bold border-b border-gray-600 pb-1 mb-1 text-xs">History</div>
-              <div className="grid grid-cols-2 gap-x-2 text-left">
-                  <span className="text-gray-400">Total:</span> <span className="text-right">{data.total_orders}</span>
-                  <span className="text-green-400">Delivered:</span> <span className="text-right">{data.delivered}</span>
-                  <span className="text-red-400">Cancel:</span> <span className="text-right">{data.cancelled}</span>
-              </div>
-              <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-gray-800"></div>
+      <div className="w-[200px] p-3 bg-white border border-gray-100 rounded-xl shadow-sm">
+          <div className="flex justify-between items-start mb-2">
+            <div className="flex items-center gap-2">
+               {isHighSuccess ? (
+                 <ShieldCheck size={20} className="text-green-500" />
+               ) : (
+                 <AlertTriangle size={20} className={colorClass} />
+               )}
+               <div>
+                 <p className="text-[9px] text-gray-400 font-bold uppercase leading-none mb-0.5">Success Rate</p>
+                 <p className={`text-lg font-black leading-none ${colorClass}`}>{rate}%</p>
+               </div>
+            </div>
+            <span className="text-[10px] font-bold text-gray-600 bg-gray-50 px-2 py-1 rounded-md border border-gray-100">{data.total_orders} Orders</span>
+          </div>
+          
+          <div className="grid grid-cols-2 gap-2">
+            <div className="bg-green-50 border border-green-100 rounded-lg p-1.5 text-center">
+               <p className="text-[9px] font-bold text-green-400 uppercase leading-none mb-1">Delivered</p>
+               <p className="text-sm font-black text-green-700 leading-none">{data.delivered}</p>
+            </div>
+            <div className="bg-red-50 border border-red-100 rounded-lg p-1.5 text-center">
+               <p className="text-[9px] font-bold text-red-400 uppercase leading-none mb-1">Cancelled</p>
+               <p className="text-sm font-black text-red-700 leading-none">{data.cancelled}</p>
+            </div>
           </div>
       </div>
   );
@@ -292,7 +289,7 @@ export const OrderDashboardView: React.FC<OrderDashboardViewProps> = ({ orders, 
               <th className="px-6 py-4 text-xs font-medium text-gray-400">Payment</th>
               <th className="px-6 py-4 text-xs font-medium text-gray-400">Amount</th>
               <th className="px-6 py-4 text-xs font-medium text-gray-400 text-center">Action</th>
-              <th className="px-6 py-4 text-xs font-medium text-gray-400 text-center">History</th>
+              <th className="px-6 py-4 text-xs font-medium text-gray-400 text-left">Fraud Check</th>
               <th className="px-6 py-4 text-xs font-medium text-gray-400 text-center">Status</th>
               <th className="px-6 py-4 text-xs font-medium text-gray-400 text-right">More</th>
             </tr>
@@ -324,7 +321,7 @@ export const OrderDashboardView: React.FC<OrderDashboardViewProps> = ({ orders, 
                     {formatWCStatus(order.status)}
                   </span>
                 </td>
-                <td className="px-6 py-5 text-center">
+                <td className="px-6 py-5 text-left">
                   <FraudStatus phone={order.customer.phone} />
                 </td>
                 <td className="px-6 py-5 text-center">
@@ -369,4 +366,3 @@ export const OrderDashboardView: React.FC<OrderDashboardViewProps> = ({ orders, 
     </div>
   );
 };
-    

@@ -3,7 +3,7 @@
  * Plugin Name: BdCommerce SMS Manager
  * Plugin URI:  https://bdcommerce.com
  * Description: A complete SMS & Customer Management solution. Sync customers and send Bulk SMS by relaying requests through your Main Dashboard. Includes Live Capture & Fraud Check in Orders.
- * Version:     2.4.2
+ * Version:     2.5.3
  * Author:      BdCommerce
  * License:     GPL2
  */
@@ -50,8 +50,15 @@ class BDC_SMS_Manager {
         add_action( 'wp_ajax_bdc_verify_otp', array( $this, 'ajax_verify_otp' ) );
         add_action( 'wp_ajax_nopriv_bdc_verify_otp', array( $this, 'ajax_verify_otp' ) );
 
+        // VPN AJAX
+        add_action( 'wp_ajax_bdc_check_vpn', array( $this, 'ajax_check_vpn' ) );
+        add_action( 'wp_ajax_nopriv_bdc_check_vpn', array( $this, 'ajax_check_vpn' ) );
+
         // Live Capture Injection
         add_action( 'wp_footer', array( $this, 'inject_live_capture_script' ) );
+        
+        // VPN Script Injection
+        add_action( 'wp_footer', array( $this, 'inject_vpn_check_script' ) );
         
         // Remove Lead on Successful Order
         add_action( 'woocommerce_new_order', array( $this, 'remove_lead_on_order_success' ), 10, 2 );
@@ -65,6 +72,9 @@ class BDC_SMS_Manager {
 
         // Checkout Validation (Server Side Backup)
         add_action( 'woocommerce_checkout_process', array( $this, 'execute_fraud_guard_checks' ) );
+
+        // SMS Automation Hook
+        add_action( 'woocommerce_order_status_changed', array( $this, 'handle_order_status_change_sms' ), 10, 3 );
     }
 
     /**
@@ -78,10 +88,8 @@ class BDC_SMS_Manager {
 
     /**
      * Check License Logic
-     * @param bool $force_check If true, ignores cache and calls API immediately.
      */
     private function is_license_active($force_check = false) {
-        // Return runtime cache if available to prevent double API calls in one page load
         if ($this->runtime_cache !== null && !$force_check) {
             return $this->runtime_cache;
         }
@@ -92,7 +100,6 @@ class BDC_SMS_Manager {
 
         $cache_key = 'bdc_license_status_' . md5($license_key);
         
-        // Use Cache if not forced
         if (!$force_check) {
             $cached_status = get_transient($cache_key);
             if ( false !== $cached_status ) {
@@ -126,14 +133,12 @@ class BDC_SMS_Manager {
         $data = json_decode( $body, true );
 
         if ( isset($data['valid']) && $data['valid'] === true ) {
-            // Cache valid status for 30 minutes (Reduced from 12 hours)
             set_transient($cache_key, 'valid', 30 * MINUTE_IN_SECONDS);
             $this->runtime_cache = true;
             return true;
         }
 
         $this->license_error = isset($data['message']) ? $data['message'] : 'Invalid Key Response';
-        // Cache invalid status for 30 minutes
         set_transient($cache_key, 'invalid', 30 * MINUTE_IN_SECONDS);
         $this->runtime_cache = false;
         return false;
@@ -141,7 +146,6 @@ class BDC_SMS_Manager {
 
     public function license_check_notice() {
         $screen = get_current_screen();
-        // Force check when on plugin page to show real-time status
         if ( $screen && $screen->id === 'toplevel_page_bdc-sms-manager' ) {
             if ( ! $this->is_license_active(true) ) {
                 $error_msg = $this->license_error ? " ($this->license_error)" : "";
@@ -150,9 +154,6 @@ class BDC_SMS_Manager {
         }
     }
 
-    /**
-     * Create Database Table for Customers
-     */
     public function create_tables() {
         global $wpdb;
         $charset_collate = $wpdb->get_charset_collate();
@@ -173,9 +174,6 @@ class BDC_SMS_Manager {
         dbDelta( $sql );
     }
 
-    /**
-     * Add Menu Page
-     */
     public function add_admin_menu() {
         add_menu_page(
             'SMS Manager',
@@ -188,36 +186,101 @@ class BDC_SMS_Manager {
         );
     }
 
-    /**
-     * Register Settings
-     */
     public function register_settings() {
-        // Main Config
         register_setting( 'bdc_sms_group', 'bdc_dashboard_url' );
         register_setting( 'bdc_sms_group', 'bdc_license_key' ); 
-        
-        // Fraud Guard Settings
-        register_setting( 'bdc_fraud_group', 'bdc_fraud_phone_validation' ); 
-        register_setting( 'bdc_fraud_group', 'bdc_fraud_history_check' ); 
-        register_setting( 'bdc_fraud_group', 'bdc_fraud_min_rate' ); 
-        register_setting( 'bdc_fraud_group', 'bdc_fraud_disable_cod' ); 
-        register_setting( 'bdc_fraud_group', 'bdc_fraud_enable_otp' ); 
+        register_setting( 'bdc_sms_group', 'bdc_fraud_phone_validation' ); 
+        register_setting( 'bdc_sms_group', 'bdc_fraud_phone_error_msg' ); 
+        register_setting( 'bdc_sms_group', 'bdc_fraud_history_check' ); 
+        register_setting( 'bdc_sms_group', 'bdc_fraud_min_rate' ); 
+        register_setting( 'bdc_sms_group', 'bdc_fraud_disable_cod' ); 
+        register_setting( 'bdc_sms_group', 'bdc_fraud_enable_otp' ); 
+        register_setting( 'bdc_sms_group', 'bdc_vpn_block_enabled' ); 
+        register_setting( 'bdc_sms_group', 'bdc_sms_automation_settings' ); 
     }
 
-    /**
-     * FRAUD GUARD: Server Side Validation
-     */
-    public function execute_fraud_guard_checks() {
-        // Use cached license check for checkout speed (30 min validity)
+    public function handle_order_status_change_sms( $order_id, $old_status, $new_status ) {
         if ( ! $this->is_license_active(false) ) return;
+
+        $settings = get_option('bdc_sms_automation_settings', []);
+        $clean_status = str_replace('wc-', '', $new_status);
+
+        if ( isset($settings[$clean_status]) && !empty($settings[$clean_status]['enabled']) ) {
+            $order = wc_get_order( $order_id );
+            if ( ! $order ) return;
+
+            $phone = $order->get_billing_phone();
+            if ( empty($phone) ) return;
+
+            $template = isset($settings[$clean_status]['template']) ? $settings[$clean_status]['template'] : '';
+            if ( empty($template) ) return;
+
+            $first_name = $order->get_billing_first_name();
+            $last_name = $order->get_billing_last_name();
+            $full_name = trim( $first_name . ' ' . $last_name );
+            if(empty($full_name)) $full_name = 'Customer';
+
+            $message = str_replace(
+                array('[name]', '[order_id]', '[amount]', '[status]'),
+                array($full_name, $order_id, $order->get_total(), wc_get_order_status_name($new_status)),
+                $template
+            );
+
+            $this->send_remote_sms( $phone, $message );
+        }
+    }
+
+    private function send_remote_sms( $phone, $message ) {
+        $api_base = $this->get_api_base_url();
+        if ( ! $api_base ) return;
+
+        $formatted_phone = preg_replace('/[^0-9]/', '', $phone);
+        if ( strlen( $formatted_phone ) == 11 && substr( $formatted_phone, 0, 2 ) == '01' ) {
+            $formatted_phone = '88' . $formatted_phone;
+        }
+
+        $type = (mb_strlen($message) != strlen($message)) ? 'unicode' : 'text';
+
+        wp_remote_post( $api_base . '/send_sms.php', array(
+            'body' => json_encode(array(
+                "contacts" => $formatted_phone, 
+                "msg" => $message, 
+                "type" => $type
+            )),
+            'headers' => array('Content-Type' => 'application/json'),
+            'timeout' => 15, 
+            'blocking' => false, 
+            'sslverify' => false
+        ));
+    }
+
+    public function execute_fraud_guard_checks() {
+        if ( ! $this->is_license_active(false) ) return;
+
+        if ( get_option('bdc_vpn_block_enabled') ) {
+            $ip = $this->get_user_ip();
+            $license_key = get_option('bdc_license_key');
+            
+            $vpn_response = wp_remote_get( "https://dash.hoorin.com/api/ip/ip.php?api_key={$license_key}&ip={$ip}", array('timeout' => 5, 'sslverify' => false) );
+            
+            if ( !is_wp_error($vpn_response) ) {
+                $body = wp_remote_retrieve_body($vpn_response);
+                $data = json_decode($body, true);
+                if ( isset($data['proxy']) && $data['proxy'] === 'yes' ) {
+                    wc_add_notice( __( '<strong>Security Alert:</strong> Orders from VPN/Proxy are not allowed. Please disable your VPN.', 'bdc-sms' ), 'error' );
+                    return;
+                }
+            }
+        }
 
         $billing_phone = isset( $_POST['billing_phone'] ) ? $_POST['billing_phone'] : '';
         $clean_phone = preg_replace( '/[^0-9]/', '', $billing_phone );
 
-        // 1. Validate 11-Digit Length
         if ( get_option( 'bdc_fraud_phone_validation' ) ) {
             if ( strlen( $clean_phone ) < 11 ) {
-                wc_add_notice( __( '<strong>Mobile Number Error:</strong> Please enter a valid 11-digit mobile number.', 'bdc-sms' ), 'error' );
+                $custom_msg = get_option('bdc_fraud_phone_error_msg');
+                $error_message = !empty($custom_msg) ? $custom_msg : __( '<strong>Mobile Number Error:</strong> Please enter a valid 11-digit mobile number.', 'bdc-sms' );
+                wc_add_notice( $error_message, 'error' );
                 return;
             }
         }
@@ -226,7 +289,6 @@ class BDC_SMS_Manager {
             return;
         }
 
-        // 2. Validate Delivery History & Payment Method
         if ( get_option( 'bdc_fraud_history_check' ) ) {
             $api_base = $this->get_api_base_url();
             if ( ! $api_base ) return;
@@ -260,8 +322,6 @@ class BDC_SMS_Manager {
     }
 
     public function ajax_send_otp() {
-        // Force check for OTP to prevent abuse, but rely on short cache for speed if needed
-        // Using false (cache) here for speed, assuming Fraud Guard passed.
         if ( ! $this->is_license_active(false) ) wp_send_json_error("License Inactive");
 
         $phone = isset($_POST['phone']) ? sanitize_text_field($_POST['phone']) : '';
@@ -306,8 +366,109 @@ class BDC_SMS_Manager {
         }
     }
 
+    private function get_user_ip() {
+        $ip = '';
+        if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
+            $ip = $_SERVER['HTTP_CF_CONNECTING_IP'];
+        } elseif (!empty($_SERVER['HTTP_X_REAL_IP'])) {
+            $ip = $_SERVER['HTTP_X_REAL_IP'];
+        } elseif (!empty($_SERVER['HTTP_CLIENT_IP'])) {
+            $ip = $_SERVER['HTTP_CLIENT_IP'];
+        } elseif (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+            $ip = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR'])[0];
+        } elseif (!empty($_SERVER['REMOTE_ADDR'])) {
+            $ip = $_SERVER['REMOTE_ADDR'];
+        }
+        return trim($ip);
+    }
+
+    public function ajax_check_vpn() {
+        if ( get_option( 'bdc_vpn_block_enabled' ) !== '1' ) {
+            wp_send_json_success(array('proxy' => 'no')); 
+        }
+
+        $ip = $this->get_user_ip();
+        $license_key = get_option('bdc_license_key');
+        
+        if ( empty($license_key) ) {
+            wp_send_json_error("License Key Missing");
+        }
+
+        $response = wp_remote_get( "https://dash.hoorin.com/api/ip/ip.php?api_key={$license_key}&ip={$ip}", array('timeout' => 5, 'sslverify' => false) );
+
+        if ( is_wp_error( $response ) ) {
+            wp_send_json_error( $response->get_error_message() );
+        }
+
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+
+        if ( isset($data['proxy']) ) {
+            wp_send_json_success( $data );
+        } else {
+            wp_send_json_error("Invalid API Response");
+        }
+    }
+
+    public function inject_vpn_check_script() {
+        if ( get_option( 'bdc_vpn_block_enabled' ) !== '1' ) return;
+        if ( ! $this->is_license_active(false) ) return;
+        if ( current_user_can('manage_options') ) return;
+
+        $admin_ajax = admin_url('admin-ajax.php');
+        
+        $css = "
+        #bdc-vpn-modal { display: none; position: fixed; z-index: 9999999; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.95); align-items: center; justify-content: center; backdrop-filter: blur(10px); }
+        .bdc-vpn-content { background: #ffffff; width: 90%; max-width: 450px; padding: 40px; border-radius: 16px; text-align: center; position: relative; border: 1px solid #e5e7eb; }
+        .bdc-vpn-btn { background: #dc2626; color: white; padding: 12px 24px; border-radius: 8px; font-weight: 600; cursor: pointer; border: none; }
+        body.bdc-vpn-blocked { overflow: hidden !important; }
+        ";
+        
+        echo "<style>{$css}</style>";
+        
+        echo '
+        <div id="bdc-vpn-modal">
+            <div class="bdc-vpn-content">
+                <h2 style="margin-top:0">Access Restricted</h2>
+                <p>We have detected that you are using a <strong>VPN or Proxy</strong>. Please disable your VPN to access our store.</p>
+                <button onclick="window.location.reload()" class="bdc-vpn-btn">I have disabled VPN</button>
+            </div>
+        </div>
+        ';
+
+        ?>
+        <script type="text/javascript">
+        jQuery(document).ready(function($) {
+            var vpnStatus = sessionStorage.getItem('bdc_vpn_status');
+            
+            if (vpnStatus === 'blocked') {
+                showVpnBlock();
+            } else if (vpnStatus !== 'clean') {
+                $.ajax({
+                    url: "<?php echo $admin_ajax; ?>",
+                    data: { action: "bdc_check_vpn" },
+                    method: "POST",
+                    success: function(res) {
+                        if(res.success && res.data.proxy === 'yes') {
+                            sessionStorage.setItem('bdc_vpn_status', 'blocked');
+                            showVpnBlock();
+                        } else {
+                            sessionStorage.setItem('bdc_vpn_status', 'clean');
+                        }
+                    }
+                });
+            }
+
+            function showVpnBlock() {
+                $('#bdc-vpn-modal').css('display', 'flex');
+                $('body').addClass('bdc-vpn-blocked');
+            }
+        });
+        </script>
+        <?php
+    }
+
     public function enqueue_assets( $hook ) {
-        // Only load frontend scripts if license is active (Cached check)
         if ( is_checkout() && $this->is_license_active(false) ) {
             $api_base = $this->get_api_base_url();
             if($api_base) {
@@ -321,24 +482,10 @@ class BDC_SMS_Manager {
                 $custom_css = "
                     .bdc-modal { position: fixed; z-index: 2147483647 !important; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; background-color: rgba(0,0,0,0.85); backdrop-filter: blur(5px); display: none; align-items:center; justify-content:center; }
                     .bdc-modal.show-modal { display: flex !important; }
-                    .bdc-modal-content { background-color: #ffffff; margin: auto; padding: 30px; border-radius: 16px; width: 90%; max-width: 420px; text-align: center; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); position: relative; font-family: -apple-system, system-ui, sans-serif; animation: bdcSlideUp 0.3s ease-out; border: 1px solid #e5e7eb; }
-                    @keyframes bdcSlideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-                    .bdc-icon-wrap { width: 60px; height: 60px; background: #fff7ed; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; }
-                    .bdc-icon { font-size: 24px; }
-                    .bdc-title { margin: 0 0 10px; color: #1e293b; font-size: 20px; font-weight: 700; }
-                    .bdc-desc { font-size: 14px; color: #64748b; margin-bottom: 25px; line-height: 1.5; }
-                    .bdc-otp-input { width: 100%; padding: 15px; margin-bottom: 20px; border: 2px solid #e2e8f0; border-radius: 8px; font-size: 24px; font-weight: 700; letter-spacing: 8px; text-align: center; box-sizing: border-box; outline: none; transition: border 0.2s; color: #334155; }
-                    .bdc-otp-input:focus { border-color: #ea580c; }
-                    .bdc-btn { background-color: #ea580c; color: white; padding: 15px 20px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: 600; width: 100%; transition: transform 0.1s, background 0.2s; box-shadow: 0 4px 6px -1px rgba(234, 88, 12, 0.2); }
-                    .bdc-btn:hover { background-color: #c2410c; }
-                    .bdc-btn:active { transform: scale(0.98); }
-                    .bdc-btn:disabled { opacity: 0.7; cursor: not-allowed; }
-                    .bdc-resend { margin-top: 20px; font-size: 13px; color: #64748b; background: none; border: none; padding: 0; cursor: default; }
-                    .bdc-resend-link { color: #ea580c; font-weight: 600; cursor: pointer; text-decoration: none; }
-                    .bdc-resend-link:hover { text-decoration: underline; }
-                    .bdc-error { color: #ef4444; font-size: 13px; margin-top: 10px; display: none; font-weight: 500; background: #fef2f2; padding: 8px; border-radius: 6px; }
-                    .bdc-close { position: absolute; right: 20px; top: 20px; color: #94a3b8; font-size: 24px; cursor: pointer; transition: color 0.2s; line-height: 1; }
-                    .bdc-close:hover { color: #ef4444; }
+                    .bdc-modal-content { background-color: #ffffff; margin: auto; padding: 30px; border-radius: 16px; width: 90%; max-width: 420px; text-align: center; }
+                    .bdc-otp-input { width: 100%; padding: 15px; margin-bottom: 20px; border: 2px solid #e2e8f0; border-radius: 8px; font-size: 24px; font-weight: 700; text-align: center; }
+                    .bdc-btn { background-color: #ea580c; color: white; padding: 15px 20px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: 600; width: 100%; }
+                    .bdc-close { position: absolute; right: 20px; top: 20px; color: #94a3b8; font-size: 24px; cursor: pointer; }
                 ";
                 wp_add_inline_style('woocommerce-general', $custom_css);
 
@@ -357,109 +504,47 @@ class BDC_SMS_Manager {
                         var checkedPhones = {};
                         var isChecking = false;
 
-                        // Force modal to body end to avoid z-index traps
                         var modalHtml = `
                             <div id="bdc-otp-modal" class="bdc-modal">
                                 <div class="bdc-modal-content">
                                     <span class="bdc-close">&times;</span>
-                                    <div class="bdc-icon-wrap">
-                                        <span class="dashicons dashicons-smartphone bdc-icon" style="color:#ea580c;">📱</span>
-                                    </div>
-                                    <h3 class="bdc-title">Verification Required</h3>
-                                    <p class="bdc-desc">To ensure secure delivery, we have sent a <strong>4-digit code</strong> to your mobile number.</p>
-                                    
-                                    <input type="tel" id="bdc-otp-code" class="bdc-otp-input" placeholder="0000" maxlength="4" autocomplete="one-time-code">
-                                    
-                                    <button type="button" id="bdc-verify-btn" class="bdc-btn">Verify & Place Order</button>
-                                    
-                                    <div id="bdc-otp-error" class="bdc-error">Invalid Code entered. Please try again.</div>
-                                    
-                                    <p class="bdc-resend">
-                                        Didn't receive code? <span id="bdc-resend-btn" class="bdc-resend-link">Resend SMS</span>
-                                    </p>
+                                    <h3>Verification Required</h3>
+                                    <p>Enter the 4-digit code sent to your phone.</p>
+                                    <input type="tel" id="bdc-otp-code" class="bdc-otp-input" placeholder="0000" maxlength="4">
+                                    <button type="button" id="bdc-verify-btn" class="bdc-btn">Verify</button>
                                 </div>
                             </div>
                         `;
+                        $('body').append(modalHtml);
                         
-                        if ($('#bdc-otp-modal').length === 0) {
-                            $('body').append(modalHtml);
-                        }
-
                         if ($('#bdc_otp_verified').length === 0) {
                             $('form.checkout').append('<input type="hidden" name="bdc_otp_verified" id="bdc_otp_verified" value="false">');
                         }
 
                         $(document).on('click', '.bdc-close', function() { 
-                            $('#bdc-otp-modal').removeClass('show-modal').fadeOut(); 
+                            $('#bdc-otp-modal').removeClass('show-modal'); 
                             $('form.checkout').removeClass('processing').unblock(); 
-                        });
-                        
-                        $(document).on('input', '#bdc-otp-code', function() {
-                            this.value = this.value.replace(/[^0-9]/g, '');
-                        });
-
-                        $(document).on('click', '#bdc-resend-btn', function() {
-                            var phone = $('#billing_phone').val();
-                            if(!phone) return;
-                            
-                            var btn = $(this);
-                            btn.text('Sending...').css('opacity', '0.5').css('pointer-events', 'none');
-                            
-                            sendOtp(phone, function() {
-                                btn.text('Sent! Wait 60s').css('color', '#16a34a');
-                                setTimeout(function(){
-                                    btn.text('Resend SMS').css('opacity', '1').css('pointer-events', 'auto').css('color', '#ea580c');
-                                }, 60000);
-                            });
                         });
 
                         $(document).on('click', '#bdc-verify-btn', function() {
                             verifyOtp();
                         });
 
-                        function showOtpModal() {
-                            $('#bdc-otp-modal').css('display', 'flex').addClass('show-modal');
-                        }
-
-                        function sendOtp(phone, callback) {
-                            $.post("{$admin_ajax}", {
-                                action: "bdc_send_otp",
-                                phone: phone
-                            }, function(res) {
-                                if(res.success) {
-                                    if(callback) callback();
-                                } else {
-                                    console.log("OTP Send Error:", res);
-                                }
-                            });
+                        function sendOtp(phone) {
+                            $.post("{$admin_ajax}", { action: "bdc_send_otp", phone: phone });
                         }
 
                         function verifyOtp() {
                             var code = $('#bdc-otp-code').val();
                             var phone = $('#billing_phone').val();
-                            
-                            if(code.length !== 4) {
-                                $('#bdc-otp-error').text('Please enter 4 digits').slideDown();
-                                return;
-                            }
-                            
-                            $('#bdc-verify-btn').text('Verifying...').prop('disabled', true);
-                            $('#bdc-otp-error').slideUp();
-                            
-                            $.post("{$admin_ajax}", {
-                                action: "bdc_verify_otp",
-                                code: code,
-                                phone: phone
-                            }, function(res) {
+                            $.post("{$admin_ajax}", { action: "bdc_verify_otp", code: code, phone: phone }, function(res) {
                                 if(res.success) {
-                                    $('#bdc-verify-btn').text('Verified! Redirecting...');
                                     isOtpVerified = true;
                                     $('#bdc_otp_verified').val('true');
-                                    $('#bdc-otp-modal').removeClass('show-modal').fadeOut(200);
+                                    $('#bdc-otp-modal').removeClass('show-modal');
                                     $('form.checkout').submit(); 
                                 } else {
-                                    $('#bdc-verify-btn').text('Verify & Place Order').prop('disabled', false);
-                                    $('#bdc-otp-error').text(res.data).slideDown();
+                                    alert("Invalid Code");
                                 }
                             });
                         }
@@ -470,22 +555,14 @@ class BDC_SMS_Manager {
                             if(isChecking) return false;
 
                             var phone = $('#billing_phone').val().replace(/[^0-9]/g, '');
-                            var paymentMethod = $('input[name="payment_method"]:checked').val();
-
                             if(phone.length < 11) return true; 
 
                             if(checkedPhones[phone]) {
                                 var status = checkedPhones[phone];
-                                if(status === "risk") {
-                                    if(fraudConfig.disableCod === "yes" && paymentMethod === "cod") {
-                                        alert("⚠️ Warning: Cash on Delivery is unavailable for your account history. Please pay via bKash or Card.");
-                                        return false; 
-                                    }
-                                    if(fraudConfig.enableOtp === "yes") {
-                                        sendOtp(phone);
-                                        showOtpModal();
-                                        return false; 
-                                    }
+                                if(status === "risk" && fraudConfig.enableOtp === "yes") {
+                                    sendOtp(phone);
+                                    $('#bdc-otp-modal').addClass('show-modal');
+                                    return false;
                                 }
                                 return true;
                             }
@@ -500,34 +577,24 @@ class BDC_SMS_Manager {
                                 success: function(data) {
                                     isChecking = false;
                                     $('form.checkout').removeClass('processing');
-
                                     var status = "safe";
                                     if(data.success_rate && data.total_orders > 0 && parseFloat(data.success_rate) < fraudConfig.minRate) {
                                         status = "risk";
                                     }
                                     checkedPhones[phone] = status;
-
-                                    if(status === "risk") {
-                                        if(fraudConfig.disableCod === "yes" && paymentMethod === "cod") {
-                                            alert("⚠️ Warning: Cash on Delivery is unavailable for your account history. Please pay via bKash or Card.");
-                                        } else if(fraudConfig.enableOtp === "yes") {
-                                            sendOtp(phone);
-                                            showOtpModal();
-                                        } else {
-                                            $('form.checkout').submit();
-                                        }
+                                    if(status === "risk" && fraudConfig.enableOtp === "yes") {
+                                        sendOtp(phone);
+                                        $('#bdc-otp-modal').addClass('show-modal');
                                     } else {
                                         $('form.checkout').submit();
                                     }
                                 },
                                 error: function() { 
                                     isChecking = false;
-                                    checkedPhones[phone] = "safe";
                                     $('form.checkout').removeClass('processing');
                                     $('form.checkout').submit(); 
                                 }
                             });
-
                             return false; 
                         });
                     });
@@ -536,7 +603,6 @@ EOD
             }
         }
 
-        // Admin Scripts
         $screen = get_current_screen();
         $is_order_page = ( 
             ( $hook === 'edit.php' && isset($_GET['post_type']) && $_GET['post_type'] === 'shop_order' ) || 
@@ -544,33 +610,10 @@ EOD
         );
 
         if ( 'toplevel_page_bdc-sms-manager' === $hook || $is_order_page ) {
-            
             if( $is_order_page && $this->is_license_active(false) ) {
                 wp_register_style( 'bdc-admin-styles', false );
                 wp_enqueue_style( 'bdc-admin-styles' );
-                $custom_css = "
-                    .column-bdc_fraud_check { width: 260px !important; min-width: 260px !important; }
-                    .bdc-fraud-wrapper { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-                    .bdc-fraud-result-card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; width: 100%; max-width: 240px; box-sizing: border-box; box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.05); margin-top: 5px; margin-bottom: 5px; position: relative; z-index: 10; }
-                    .bdc-fraud-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
-                    .bdc-rate-group { display: flex; flex-direction: column; }
-                    .bdc-rate-label { font-size: 10px; font-weight: 700; text-transform: uppercase; color: #64748b; letter-spacing: 0.5px; margin-bottom: 2px; }
-                    .bdc-rate-val { font-size: 20px; font-weight: 800; line-height: 1; display: flex; align-items: center; gap: 4px; }
-                    .bdc-total-orders { font-size: 10px; font-weight: 700; color: #1e293b; background: #f1f5f9; padding: 3px 6px; border-radius: 4px; white-space: nowrap; }
-                    .bdc-fraud-bottom { display: flex; gap: 6px; }
-                    .bdc-stat-box { flex: 1; padding: 6px; border-radius: 6px; text-align: center; }
-                    .bdc-stat-box.delivered { background: #dcfce7; border: 1px solid #bbf7d0; }
-                    .bdc-stat-box.cancelled { background: #fee2e2; border: 1px solid #fecaca; }
-                    .bdc-stat-title { font-size: 8px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; display: block; }
-                    .bdc-stat-num { font-size: 14px; font-weight: 800; display: block; }
-                    .bdc-stat-box.delivered .bdc-stat-title { color: #166534; }
-                    .bdc-stat-box.delivered .bdc-stat-num { color: #15803d; }
-                    .bdc-stat-box.cancelled .bdc-stat-title { color: #991b1b; }
-                    .bdc-stat-box.cancelled .bdc-stat-num { color: #b91c1c; }
-                    .bdc-spin { animation: bdc-spin 1s infinite linear; }
-                    @keyframes bdc-spin { 100% { transform: rotate(360deg); } }
-                    .bdc-fraud-loading { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px; color: #64748b; font-weight: 600; }
-                ";
+                $custom_css = ".column-bdc_fraud_check { width: 260px !important; }";
                 wp_add_inline_style( 'bdc-admin-styles', $custom_css );
 
                 $api_base = $this->get_api_base_url();
@@ -585,44 +628,52 @@ EOD
                                     url: "' . $api_url . '",
                                     data: { phone: phone },
                                     dataType: "json",
-                                    timeout: 10000, 
                                     success: function(data) {
-                                        if(data.error) {
-                                            container.html("<span style=\"color:#d63638; font-weight:bold; font-size:11px;\">⚠️ " + data.error + "</span>");
-                                            return;
-                                        }
-                                        var rate = parseFloat(data.success_rate);
-                                        var rateColor = rate >= 80 ? "#16a34a" : (rate < 50 ? "#dc2626" : "#ca8a04");
-                                        var shieldIcon = rate >= 80 ? "dashicons-shield" : (rate < 50 ? "dashicons-warning" : "dashicons-shield-alt");
-                                        var html = "<div class=\"bdc-fraud-result-card\">";
-                                        html += "<div class=\"bdc-fraud-top\">";
-                                        html += "  <div class=\"bdc-rate-group\">";
-                                        html += "    <span class=\"bdc-rate-label\">Success Rate</span>";
-                                        html += "    <span class=\"bdc-rate-val\" style=\"color: " + rateColor + "\"><span class=\"dashicons " + shieldIcon + "\"></span> " + rate + "%</span>";
-                                        html += "  </div>";
-                                        html += "  <div class=\"bdc-total-orders\">" + data.total_orders + " Orders</div>";
+                                        var rate = parseFloat(data.success_rate || 0);
+                                        var total = parseInt(data.total_orders || 0);
+                                        var del = parseInt(data.delivered || 0);
+                                        var can = parseInt(data.cancelled || 0);
+                                        
+                                        var isGood = rate >= 80;
+                                        var isBad = rate < 50;
+                                        var colorClass = isGood ? "color:#16a34a;" : (isBad ? "color:#dc2626;" : "color:#f97316;");
+                                        var iconClass = isGood ? "dashicons-shield" : "dashicons-warning";
+                                        
+                                        var html = "<div style=\'width:220px; padding:12px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; box-shadow:0 1px 2px rgba(0,0,0,0.05);\'>";
+                                        
+                                        // Header Row
+                                        html += "<div style=\'display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px;\'>";
+                                            html += "<div style=\'display:flex; align-items:center; gap:6px;\'>";
+                                                html += "<span class=\'dashicons " + iconClass + "\' style=\'font-size:20px; " + colorClass + "\'></span>";
+                                                html += "<div>";
+                                                    html += "<div style=\'font-size:9px; color:#94a3b8; font-weight:700; text-transform:uppercase; line-height:1;\'>Success Rate</div>";
+                                                    html += "<div style=\'font-size:18px; font-weight:900; " + colorClass + " line-height:1;\'>" + rate + "%</div>";
+                                                html += "</div>";
+                                            html += "</div>";
+                                            html += "<span style=\'font-size:10px; font-weight:700; color:#475569; background:#f8fafc; padding:3px 6px; border-radius:4px; border:1px solid #f1f5f9;\'>" + total + " Orders</span>";
                                         html += "</div>";
-                                        html += "<div class=\"bdc-fraud-bottom\">";
-                                        html += "  <div class=\"bdc-stat-box delivered\">";
-                                        html += "    <span class=\"bdc-stat-title\">Delivered</span>";
-                                        html += "    <span class=\"bdc-stat-num\">" + data.delivered + "</span>";
-                                        html += "  </div>";
-                                        html += "  <div class=\"bdc-stat-box cancelled\">";
-                                        html += "    <span class=\"bdc-stat-title\">Cancelled</span>";
-                                        html += "    <span class=\"bdc-stat-num\">" + data.cancelled + "</span>";
-                                        html += "  </div>";
+                                        
+                                        // Boxes Row
+                                        html += "<div style=\'display:grid; grid-template-columns:1fr 1fr; gap:6px;\'>";
+                                            // Delivered Box
+                                            html += "<div style=\'background:#f0fdf4; border:1px solid #dcfce7; border-radius:6px; padding:6px; text-align:center;\'>";
+                                                html += "<div style=\'font-size:8px; font-weight:700; color:#4ade80; text-transform:uppercase; margin-bottom:2px;\'>Delivered</div>";
+                                                html += "<div style=\'font-size:13px; font-weight:900; color:#15803d; line-height:1;\'>" + del + "</div>";
+                                            html += "</div>";
+                                            // Cancelled Box
+                                            html += "<div style=\'background:#fef2f2; border:1px solid #fee2e2; border-radius:6px; padding:6px; text-align:center;\'>";
+                                                html += "<div style=\'font-size:8px; font-weight:700; color:#f87171; text-transform:uppercase; margin-bottom:2px;\'>Cancelled</div>";
+                                                html += "<div style=\'font-size:13px; font-weight:900; color:#b91c1c; line-height:1;\'>" + can + "</div>";
+                                            html += "</div>";
                                         html += "</div>";
+                                        
                                         html += "</div>";
                                         container.html(html);
                                     },
-                                    error: function(xhr, status, error) {
-                                        container.html("<span style=\"color:#d63638; font-size:10px;\">⚠️ Error</span>");
-                                    }
+                                    error: function() { container.html("<span style=\'color:#ef4444; font-size:10px;\'>Check Failed</span>"); }
                                 });
                             }
-                            $(".bdc-fraud-autoload").each(function() {
-                                loadFraudData($(this));
-                            });
+                            $(".bdc-fraud-autoload").each(function() { loadFraudData($(this)); });
                         });
                     ');
                 }
@@ -638,9 +689,7 @@ EOD
                 $new_columns['bdc_fraud_check'] = __( 'Fraud Check', 'bdc-sms' );
             }
         }
-        if(!isset($new_columns['bdc_fraud_check'])) {
-             $new_columns['bdc_fraud_check'] = __( 'Fraud Check', 'bdc-sms' );
-        }
+        if(!isset($new_columns['bdc_fraud_check'])) $new_columns['bdc_fraud_check'] = __( 'Fraud Check', 'bdc-sms' );
         return $new_columns;
     }
 
@@ -661,113 +710,68 @@ EOD
         if ( ! $order ) return;
         $phone = $order->get_billing_phone();
         $clean_phone = preg_replace('/[^0-9]/', '', $phone);
-        
-        echo '<div class="bdc-fraud-wrapper bdc-fraud-autoload" data-phone="'.esc_attr($clean_phone).'">';
-        if($clean_phone) {
-            echo '<div class="bdc-fraud-loading">';
-            echo '<span class="dashicons dashicons-update bdc-spin"></span> Checking...';
-            echo '</div>';
-        } else {
-            echo '<span class="description" style="color:#aaa;">-</span>';
-        }
-        echo '</div>';
+        echo '<div class="bdc-fraud-wrapper bdc-fraud-autoload" data-phone="'.esc_attr($clean_phone).'"><span style="font-size:10px; color:#cbd5e1; font-style:italic;">Checking...</span></div>';
     }
 
     private function get_api_base_url() {
         $dashboard_url = get_option( 'bdc_dashboard_url' );
         if ( empty( $dashboard_url ) ) return null;
-
         $clean_url = preg_replace('/\/[a-zA-Z0-9_-]+\.php$/', '', $dashboard_url);
         $base_url = rtrim( $clean_url, '/' );
-        
-        if ( substr( $base_url, -3 ) === 'api' ) {
-             return $base_url;
-        } else {
-             return $base_url . '/api';
-        }
+        return ( substr( $base_url, -3 ) === 'api' ) ? $base_url : $base_url . '/api';
     }
 
     private function get_remote_features( $force_refresh = false ) {
-        // License check wrapper (Cached 30 min)
         if ( ! $this->is_license_active(false) ) return [];
-
         $api_base = $this->get_api_base_url();
         if ( ! $api_base ) return [];
 
         if ( ! $force_refresh ) {
-            $cached_features = get_transient('bdc_remote_features');
-            if ( false !== $cached_features ) {
-                return $cached_features;
-            }
+            $cached = get_transient('bdc_remote_features');
+            if ( false !== $cached ) return $cached;
         }
 
         $response = wp_remote_get( $api_base . '/features.php', array( 'timeout' => 5, 'sslverify' => false ) );
-        
-        if ( is_wp_error( $response ) ) {
-            if ( $force_refresh ) {
-                $cached = get_transient('bdc_remote_features');
-                return $cached !== false ? $cached : [];
-            }
-            return [];
-        }
+        if ( is_wp_error( $response ) ) return [];
 
         $body = wp_remote_retrieve_body( $response );
         $features = json_decode( $body, true );
-
         if ( is_array( $features ) ) {
             set_transient( 'bdc_remote_features', $features, 5 * MINUTE_IN_SECONDS );
             return $features;
         }
-
         return [];
     }
 
     public function remove_lead_on_order_success( $order_id, $order = null ) {
-        if ( !$order ) {
-            $order = wc_get_order( $order_id );
-        }
+        if ( !$order ) $order = wc_get_order( $order_id );
         if ( !$order ) return;
-
         $api_base = $this->get_api_base_url();
         if ( ! $api_base ) return;
-
         $phone = $order->get_billing_phone();
         if ( empty($phone) ) return;
 
         wp_remote_post( $api_base . '/live_capture.php', array(
-            'body' => json_encode(array(
-                "action" => "delete",
-                "phone" => $phone
-            )),
+            'body' => json_encode(array("action" => "delete", "phone" => $phone)),
             'headers' => array('Content-Type' => 'application/json'),
-            'timeout' => 5, 
-            'blocking' => false, 
-            'sslverify' => false
+            'timeout' => 5, 'blocking' => false, 'sslverify' => false
         ));
     }
 
     public function inject_live_capture_script() {
         if ( ! is_checkout() || is_order_received_page() ) return;
         if ( ! $this->is_license_active(false) ) return;
-
         $api_base = $this->get_api_base_url();
         if ( ! $api_base ) return;
 
         $features = $this->get_remote_features( false );
-        if ( empty($features['live_capture']) || $features['live_capture'] !== true ) {
-            return;
-        }
+        if ( empty($features['live_capture']) || $features['live_capture'] !== true ) return;
 
         $cart_items = [];
         if ( WC()->cart ) {
             foreach ( WC()->cart->get_cart() as $cart_item ) {
                 $product = $cart_item['data'];
-                $cart_items[] = [
-                    'product_id' => $cart_item['product_id'],
-                    'name' => $product->get_name(),
-                    'quantity' => $cart_item['quantity'],
-                    'total' => $cart_item['line_total']
-                ];
+                $cart_items[] = ['product_id' => $cart_item['product_id'], 'name' => $product->get_name(), 'quantity' => $cart_item['quantity'], 'total' => $cart_item['line_total']];
             }
         }
         $cart_total = WC()->cart ? WC()->cart->total : 0;
@@ -781,7 +785,6 @@ EOD
                 const sessionId = "<?php echo esc_js($session_id); ?>";
                 const cartItems = <?php echo json_encode($cart_items); ?>;
                 const cartTotal = <?php echo esc_js($cart_total); ?>;
-                
                 let debounceTimer;
 
                 function captureData() {
@@ -792,27 +795,13 @@ EOD
 
                     if(phone && phone.length > 5) {
                         $.ajax({
-                            url: apiEndpoint,
-                            type: 'POST',
-                            contentType: 'application/json',
-                            data: JSON.stringify({
-                                session_id: sessionId,
-                                phone: phone,
-                                name: name,
-                                email: email,
-                                address: address,
-                                cart_items: cartItems,
-                                cart_total: cartTotal
-                            }),
+                            url: apiEndpoint, type: 'POST', contentType: 'application/json',
+                            data: JSON.stringify({ session_id: sessionId, phone: phone, name: name, email: email, address: address, cart_items: cartItems, cart_total: cartTotal }),
                             success: function(res) {}
                         });
                     }
                 }
-
-                $('form.checkout').on('input', 'input', function() {
-                    clearTimeout(debounceTimer);
-                    debounceTimer = setTimeout(captureData, 1000); 
-                });
+                $('form.checkout').on('input', 'input', function() { clearTimeout(debounceTimer); debounceTimer = setTimeout(captureData, 1000); });
             });
         })(jQuery);
         </script>
@@ -830,9 +819,7 @@ EOD
 
     public function ajax_sync_customers() {
         check_ajax_referer( 'bdc_sms_nonce', 'nonce' );
-        // Force check for manual sync action
         if ( ! $this->is_license_active(true) ) wp_send_json_error("License Inactive");
-
         if ( ! class_exists( 'WooCommerce' ) ) wp_send_json_error( 'WooCommerce is not installed.' );
         global $wpdb;
         $orders = wc_get_orders( array('limit' => -1, 'status' => array('wc-completed', 'wc-processing', 'wc-on-hold')) );
@@ -840,7 +827,6 @@ EOD
         foreach ( $orders as $order ) {
             $phone = preg_replace( '/[^0-9]/', '', $order->get_billing_phone() );
             if ( empty( $phone ) ) continue;
-            
             $exists = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $this->table_name WHERE phone = %s", $phone ) );
             if ( $exists ) {
                 $wpdb->update($this->table_name, array('name' => $order->get_billing_first_name().' '.$order->get_billing_last_name(), 'email' => $order->get_billing_email(), 'last_order_date' => $order->get_date_created()->date('Y-m-d H:i:s')), array('id' => $exists->id));
@@ -849,21 +835,17 @@ EOD
                 $count++;
             }
         }
-        
         wp_send_json_success( "$count new customers imported." );
     }
 
     public function ajax_send_sms() {
         check_ajax_referer( 'bdc_sms_nonce', 'nonce' );
-        // Force check for manual SMS sending to prevent unauthorized use
         if ( ! $this->is_license_active(true) ) wp_send_json_error("License Inactive");
-
         $numbers = $_POST['numbers'] ?? [];
         $message = $_POST['message'] ?? '';
         $api_base = $this->get_api_base_url();
         if ( !$api_base ) wp_send_json_error( 'Dashboard URL missing.' );
         if ( empty( $numbers ) || empty( $message ) ) wp_send_json_error( 'Inputs empty.' );
-
         $formatted_numbers = [];
         foreach ( $numbers as $phone ) {
             $p = $phone; 
@@ -872,13 +854,11 @@ EOD
         }
         $contacts_csv = implode(',', $formatted_numbers);
         $type = (mb_strlen($message) != strlen($message)) ? 'unicode' : 'text';
-
         $response = wp_remote_post( $api_base . '/send_sms.php', array(
             'body' => json_encode(array("contacts" => $contacts_csv, "msg" => $message, "type" => $type)),
             'headers' => array('Content-Type' => 'application/json'),
             'timeout' => 25, 'sslverify' => false
         ));
-
         if ( is_wp_error( $response ) ) wp_send_json_error( $response->get_error_message() );
         wp_send_json_success( "Sent successfully." );
     }
@@ -887,12 +867,11 @@ EOD
         global $wpdb;
         $customers = $wpdb->get_results( "SELECT * FROM $this->table_name ORDER BY id DESC" );
         $is_connected = $this->check_connection();
-        // Force check on dashboard load to show current status
         $is_licensed = $this->is_license_active(true);
         $features = $this->get_remote_features( true );
+        $api_base = $this->get_api_base_url();
         include(plugin_dir_path(__FILE__) . 'admin-view.php');
     }
 }
 
 new BDC_SMS_Manager();
-?>

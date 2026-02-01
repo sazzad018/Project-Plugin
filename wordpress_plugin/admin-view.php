@@ -4,6 +4,18 @@ $is_connected = isset($is_connected) ? $is_connected : false;
 $is_licensed = isset($is_licensed) ? $is_licensed : false;
 $dashboard_url = get_option( 'bdc_dashboard_url' );
 $license_key = get_option( 'bdc_license_key' );
+
+// Automation Settings
+$automation_settings = get_option( 'bdc_sms_automation_settings', array() );
+$statuses = array(
+    'pending'    => 'Pending Payment',
+    'processing' => 'Processing',
+    'on-hold'    => 'On Hold',
+    'completed'  => 'Completed',
+    'cancelled'  => 'Cancelled',
+    'refunded'   => 'Refunded',
+    'failed'     => 'Failed'
+);
 ?>
 
 <!-- Google Fonts -->
@@ -55,7 +67,7 @@ $license_key = get_option( 'bdc_license_key' );
 
     /* Tab Content Logic */
     .bdc-tab-content { display: none; animation: fadeIn 0.3s ease-in-out; }
-    .bdc-tab-content.active { display: block; }
+    .bdc-tab-content.active { display: block !important; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
     /* Grid Layout */
@@ -128,6 +140,17 @@ $license_key = get_option( 'bdc_license_key' );
     
     .bdc-list-label { font-size: 13px; font-weight: 500; color: #64748b; }
     .bdc-list-value { font-size: 13px; font-weight: 600; color: #334155; }
+
+    /* Automation Specific */
+    .bdc-automation-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+    .bdc-automation-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+    .bdc-automation-title { font-weight: 700; font-size: 15px; color: #1e293b; display: flex; align-items: center; gap: 8px; }
+    .bdc-status-dot { width: 8px; height: 8px; border-radius: 50%; background: #cbd5e1; }
+    .bdc-status-dot.active { background: #22c55e; box-shadow: 0 0 0 2px #dcfce7; }
+    .bdc-msg-box { width: 100%; min-height: 80px; padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 13px; line-height: 1.5; color: #334155; margin-bottom: 10px; font-family: inherit; resize: vertical; }
+    .bdc-msg-box:focus { border-color: #3b82f6; outline: none; }
+    .bdc-shortcodes { font-size: 11px; color: #64748b; background: #f8fafc; padding: 8px; border-radius: 6px; display: inline-block; }
+    .bdc-code { font-family: monospace; background: #e2e8f0; padding: 2px 4px; border-radius: 4px; color: #475569; font-weight: 600; margin: 0 2px; }
 </style>
 
 <div class="bdc-wrap">
@@ -138,17 +161,17 @@ $license_key = get_option( 'bdc_license_key' );
     <div class="bdc-nav">
         <div class="bdc-nav-item active" data-target="api">API Settings</div>
         <div class="bdc-nav-item" data-target="phone">Phone Validation</div>
-        <div class="bdc-nav-item" data-target="otp">OTP Settings</div>
         <div class="bdc-nav-item" data-target="courier">Courier Report</div>
         <div class="bdc-nav-item" data-target="filter">Smart Order Filter</div>
         <div class="bdc-nav-item" data-target="vpn">VPN Block</div>
         <div class="bdc-nav-item" data-target="fraud">Fraud Detection</div>
+        <div class="bdc-nav-item" data-target="phonesearch">Phone Search</div>
+        <div class="bdc-nav-item" data-target="automation">SMS Automation</div>
         <div class="bdc-nav-item" data-target="incomplete">Incomplete Orders</div>
     </div>
 
     <form method="post" action="options.php">
         <?php settings_fields( 'bdc_sms_group' ); ?>
-        <?php settings_fields( 'bdc_fraud_group' ); ?>
 
         <!-- TAB 1: API Settings -->
         <div id="content-api" class="bdc-tab-content active">
@@ -228,29 +251,13 @@ $license_key = get_option( 'bdc_license_key' );
                         <span class="bdc-slider"></span>
                     </label>
                 </div>
-                
-                <div style="margin-top:20px;">
-                    <button type="submit" class="bdc-btn bdc-btn-primary">Save Settings</button>
-                </div>
-            </div>
-        </div>
 
-        <!-- TAB 3: OTP Settings -->
-        <div id="content-otp" class="bdc-tab-content">
-            <div class="bdc-card" style="max-width: 800px;">
-                <h3 style="font-size:16px; font-weight:700; margin-bottom:20px;">OTP Verification</h3>
-                
-                <div class="bdc-setting-row">
-                    <div class="bdc-setting-label">
-                        <h4>Enable OTP for COD</h4>
-                        <p>Require SMS verification if the user selects Cash on Delivery.</p>
-                    </div>
-                    <label class="bdc-switch">
-                        <input type="checkbox" name="bdc_fraud_enable_otp" value="1" <?php checked(1, get_option('bdc_fraud_enable_otp'), true); ?>>
-                        <span class="bdc-slider"></span>
-                    </label>
+                <div class="bdc-setting-row" style="display:block; border-bottom:none; padding-top:0;">
+                    <label style="font-size:12px; font-weight:600; color:#64748b; margin-bottom:8px; display:block;">Custom Error Message (Optional)</label>
+                    <input type="text" name="bdc_fraud_phone_error_msg" value="<?php echo esc_attr( get_option( 'bdc_fraud_phone_error_msg' ) ); ?>" class="bdc-input-field" placeholder="Mobile Number Error: Please enter a valid 11-digit mobile number." style="background:#fff; border:1px solid #e2e8f0; padding:10px; border-radius:6px; width:100%;">
+                    <p style="font-size:11px; color:#94a3b8; margin-top:5px;">If left empty, the default message will be shown.</p>
                 </div>
-
+                
                 <div style="margin-top:20px;">
                     <button type="submit" class="bdc-btn bdc-btn-primary">Save Settings</button>
                 </div>
@@ -277,11 +284,25 @@ $license_key = get_option( 'bdc_license_key' );
             </div>
         </div>
 
-        <!-- TAB 6: VPN Block (Placeholder) -->
+        <!-- TAB 6: VPN Block -->
         <div id="content-vpn" class="bdc-tab-content">
-            <div class="bdc-card">
-                <h3 style="font-size:16px; font-weight:700;">VPN & Proxy Blocker</h3>
-                <p style="font-size:13px; color:#64748b; margin-top:10px;">Automatically detects and restricts orders placed via VPN or Proxy IPs to prevent fraud.</p>
+            <div class="bdc-card" style="max-width: 800px;">
+                <h3 style="font-size:16px; font-weight:700; margin-bottom:20px;">VPN & Proxy Blocker</h3>
+                
+                <div class="bdc-setting-row">
+                    <div class="bdc-setting-label">
+                        <h4>Enable VPN/Proxy Blocking</h4>
+                        <p>Automatically detects and restricts visitors using VPNs or Proxies from accessing your site or placing orders.</p>
+                    </div>
+                    <label class="bdc-switch">
+                        <input type="checkbox" name="bdc_vpn_block_enabled" value="1" <?php checked(1, get_option('bdc_vpn_block_enabled'), true); ?>>
+                        <span class="bdc-slider"></span>
+                    </label>
+                </div>
+                
+                <div style="margin-top:20px;">
+                    <button type="submit" class="bdc-btn bdc-btn-primary">Save Settings</button>
+                </div>
             </div>
         </div>
 
@@ -312,6 +333,18 @@ $license_key = get_option( 'bdc_license_key' );
                     </label>
                 </div>
 
+                <!-- OTP Verification Toggle (Moved Here) -->
+                <div class="bdc-setting-row">
+                    <div class="bdc-setting-label">
+                        <h4>Enable OTP Verification</h4>
+                        <p>Require SMS verification for customers with low success rate (High Risk).</p>
+                    </div>
+                    <label class="bdc-switch">
+                        <input type="checkbox" name="bdc_fraud_enable_otp" value="1" <?php checked(1, get_option('bdc_fraud_enable_otp'), true); ?>>
+                        <span class="bdc-slider"></span>
+                    </label>
+                </div>
+
                 <div class="bdc-setting-row">
                     <div class="bdc-setting-label">
                         <h4>Minimum Success Rate (%)</h4>
@@ -322,6 +355,63 @@ $license_key = get_option( 'bdc_license_key' );
 
                 <div style="margin-top:20px;">
                     <button type="submit" class="bdc-btn bdc-btn-primary">Save Settings</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB: Phone Search -->
+        <div id="content-phonesearch" class="bdc-tab-content">
+            <div class="bdc-card" style="max-width: 800px;">
+                <h3 style="font-size:16px; font-weight:700; margin-bottom:20px;">Global Phone Search</h3>
+                <p style="font-size:13px; color:#64748b; margin-bottom:20px;">Check delivery history for any number from the global database.</p>
+
+                <div style="display:flex; gap:10px; margin-bottom:30px;">
+                    <input type="text" id="bdc-phone-search-input" class="bdc-input-field" placeholder="Enter Phone Number (017xxxxxxxx)" style="background:#f8fafc; border:1px solid #e2e8f0; padding:12px; border-radius:8px; width:100%; font-size:14px;">
+                    <button type="button" id="bdc-phone-search-btn" class="bdc-btn bdc-btn-primary" style="white-space:nowrap;">
+                        <span class="dashicons dashicons-search"></span> Check
+                    </button>
+                </div>
+
+                <div id="bdc-phone-result" style="display:none;"></div>
+            </div>
+        </div>
+
+        <!-- TAB 9: SMS Automation (New) -->
+        <div id="content-automation" class="bdc-tab-content">
+            <div class="bdc-card" style="max-width: 900px;">
+                <h3 style="font-size:16px; font-weight:700; margin-bottom:20px;">SMS Automation Rules</h3>
+                <p style="font-size:13px; color:#64748b; margin-bottom:25px;">Configure automatic SMS messages based on order status changes. Toggle the switch to enable/disable specific notifications.</p>
+                
+                <?php foreach ($statuses as $slug => $label): 
+                    $isEnabled = isset($automation_settings[$slug]['enabled']) ? $automation_settings[$slug]['enabled'] : 0;
+                    $template = isset($automation_settings[$slug]['template']) ? $automation_settings[$slug]['template'] : "Hi [name], your order #[order_id] is now $label.";
+                ?>
+                <div class="bdc-automation-card">
+                    <div class="bdc-automation-header">
+                        <div class="bdc-automation-title">
+                            <div class="bdc-status-dot <?php echo $isEnabled ? 'active' : ''; ?>"></div>
+                            <?php echo esc_html($label); ?> Status
+                        </div>
+                        <label class="bdc-switch">
+                            <input type="checkbox" name="bdc_sms_automation_settings[<?php echo esc_attr($slug); ?>][enabled]" value="1" <?php checked(1, $isEnabled, true); ?>>
+                            <span class="bdc-slider"></span>
+                        </label>
+                    </div>
+                    
+                    <textarea name="bdc_sms_automation_settings[<?php echo esc_attr($slug); ?>][template]" class="bdc-msg-box" placeholder="Type your message here..."><?php echo esc_textarea($template); ?></textarea>
+                    
+                    <div class="bdc-shortcodes">
+                        Available Shortcodes: 
+                        <span class="bdc-code">[name]</span>
+                        <span class="bdc-code">[order_id]</span>
+                        <span class="bdc-code">[amount]</span>
+                        <span class="bdc-code">[status]</span>
+                    </div>
+                </div>
+                <?php endforeach; ?>
+
+                <div style="margin-top:20px;">
+                    <button type="submit" class="bdc-btn bdc-btn-primary">Save Automation Settings</button>
                 </div>
             </div>
         </div>
@@ -367,8 +457,19 @@ $license_key = get_option( 'bdc_license_key' );
 <!-- Scripts for Tabs & Data -->
 <script>
 jQuery(document).ready(function($) {
-    // Tab Switching Logic
-    $('.bdc-nav-item').on('click', function() {
+    // 1. Restore Active Tab from LocalStorage
+    var savedTab = localStorage.getItem('bdc_active_tab');
+    if(savedTab && $('#content-' + savedTab).length > 0) {
+        $('.bdc-nav-item').removeClass('active');
+        $('.bdc-tab-content').removeClass('active');
+        
+        $('.bdc-nav-item[data-target="' + savedTab + '"]').addClass('active');
+        $('#content-' + savedTab).addClass('active');
+    }
+
+    // 2. Tab Switching Logic
+    $('.bdc-nav-item').on('click', function(e) {
+        e.preventDefault(); // Prevent default just in case
         var target = $(this).data('target');
         
         // Remove active class from all nav items and contents
@@ -378,10 +479,13 @@ jQuery(document).ready(function($) {
         // Add active class to clicked item and target content
         $(this).addClass('active');
         $('#content-' + target).addClass('active');
+        
+        // Save to LocalStorage
+        localStorage.setItem('bdc_active_tab', target);
     });
 
     // Fetch SMS Balance
-    <?php if ($is_licensed && $api_base): ?>
+    <?php if ($is_licensed && isset($api_base) && $api_base): ?>
     $.ajax({
         url: "<?php echo esc_url($api_base . '/manage_sms_balance.php'); ?>",
         dataType: 'json',
@@ -399,5 +503,68 @@ jQuery(document).ready(function($) {
     <?php else: ?>
         $('#sms-balance-display').text('0');
     <?php endif; ?>
+
+    // Phone Search Logic
+    $('#bdc-phone-search-btn').on('click', function() {
+        var phone = $('#bdc-phone-search-input').val();
+        var container = $('#bdc-phone-result');
+        var btn = $(this);
+        
+        if(phone.length < 10) { alert('Invalid Phone Number'); return; }
+
+        btn.prop('disabled', true).text('Checking...');
+        container.hide().html('');
+
+        // Construct API URL based on PHP variable
+        var dashboardUrl = "<?php echo rtrim($dashboard_url, '/'); ?>"; 
+        var apiUrl = dashboardUrl.includes('/api') ? dashboardUrl : dashboardUrl + '/api';
+
+        $.ajax({
+            url: apiUrl + '/check_fraud.php',
+            data: { phone: phone, refresh: 'true' }, // Force refresh for manual check
+            dataType: 'json',
+            success: function(res) {
+                btn.prop('disabled', false).html('<span class="dashicons dashicons-search"></span> Check');
+                
+                if(res.error) {
+                    container.html('<div style="color:red; padding:20px; text-align:center;">' + res.error + '</div>').show();
+                    return;
+                }
+
+                var rate = parseFloat(res.success_rate);
+                var color = rate >= 80 ? '#16a34a' : (rate >= 50 ? '#ea580c' : '#dc2626');
+                var bg = rate >= 80 ? '#f0fdf4' : (rate >= 50 ? '#fff7ed' : '#fef2f2');
+                
+                var html = '<div style="background:'+bg+'; border:1px solid '+color+'; border-radius:12px; padding:30px; text-align:center;">';
+                html += '<div style="font-size:48px; font-weight:900; color:'+color+'; line-height:1;">' + rate + '%</div>';
+                html += '<div style="font-size:12px; font-weight:700; color:'+color+'; text-transform:uppercase; margin-top:5px; margin-bottom:20px;">Success Rate</div>';
+                
+                html += '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; border-top:1px solid rgba(0,0,0,0.05); padding-top:20px;">';
+                    html += '<div><div style="font-size:20px; font-weight:800; color:#334155;">' + res.total_orders + '</div><div style="font-size:10px; color:#64748b; text-transform:uppercase;">Total</div></div>';
+                    html += '<div><div style="font-size:20px; font-weight:800; color:#16a34a;">' + res.delivered + '</div><div style="font-size:10px; color:#16a34a; text-transform:uppercase;">Delivered</div></div>';
+                    html += '<div><div style="font-size:20px; font-weight:800; color:#dc2626;">' + res.cancelled + '</div><div style="font-size:10px; color:#dc2626; text-transform:uppercase;">Cancelled</div></div>';
+                html += '</div>';
+                html += '</div>';
+
+                if(res.details && res.details.length > 0) {
+                    html += '<div style="margin-top:20px; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;">';
+                    html += '<div style="padding:10px 15px; background:#f8fafc; font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase;">History Breakdown</div>';
+                    res.details.forEach(function(item) {
+                        html += '<div style="padding:10px 15px; border-top:1px solid #f1f5f9; display:flex; justify-content:space-between; font-size:13px;">';
+                        html += '<span style="font-weight:600; color:#334155;">' + item.courier + '</span>';
+                        html += '<span style="color:#64748b;">' + item.status + '</span>';
+                        html += '</div>';
+                    });
+                    html += '</div>';
+                }
+
+                container.html(html).show();
+            },
+            error: function() {
+                btn.prop('disabled', false).html('<span class="dashicons dashicons-search"></span> Check');
+                container.html('<div style="color:red; padding:20px; text-align:center;">Failed to connect to API</div>').show();
+            }
+        });
+    });
 });
 </script>
