@@ -3,7 +3,7 @@
  * Plugin Name: BdCommerce SMS Manager
  * Plugin URI:  https://bdcommerce.com
  * Description: A complete SMS & Customer Management solution. Sync customers and send Bulk SMS by relaying requests through your Main Dashboard. Includes Live Capture & Fraud Check in Orders.
- * Version:     2.5.3
+ * Version:     2.5.4
  * Author:      BdCommerce
  * License:     GPL2
  */
@@ -234,6 +234,9 @@ class BDC_SMS_Manager {
         $api_base = $this->get_api_base_url();
         if ( ! $api_base ) return;
 
+        $license_key = get_option('bdc_license_key'); // Get key
+        if(empty($license_key)) return;
+
         $formatted_phone = preg_replace('/[^0-9]/', '', $phone);
         if ( strlen( $formatted_phone ) == 11 && substr( $formatted_phone, 0, 2 ) == '01' ) {
             $formatted_phone = '88' . $formatted_phone;
@@ -243,6 +246,7 @@ class BDC_SMS_Manager {
 
         wp_remote_post( $api_base . '/send_sms.php', array(
             'body' => json_encode(array(
+                "license_key" => $license_key, // Send License Key
                 "contacts" => $formatted_phone, 
                 "msg" => $message, 
                 "type" => $type
@@ -335,6 +339,7 @@ class BDC_SMS_Manager {
 
         $message = "Your Verification Code is: " . $otp . ". Please do not share this code with anyone.";
         $api_base = $this->get_api_base_url();
+        $license_key = get_option('bdc_license_key');
         
         if(!$api_base) wp_send_json_error("SMS API not configured");
 
@@ -342,7 +347,12 @@ class BDC_SMS_Manager {
         if ( strlen( $formatted_phone ) == 11 && substr( $formatted_phone, 0, 2 ) == '01' ) $formatted_phone = '88' . $formatted_phone;
 
         $response = wp_remote_post( $api_base . '/send_sms.php', array(
-            'body' => json_encode(array("contacts" => $formatted_phone, "msg" => $message, "type" => 'text')),
+            'body' => json_encode(array(
+                "license_key" => $license_key, // Send Key
+                "contacts" => $formatted_phone, 
+                "msg" => $message, 
+                "type" => 'text'
+            )),
             'headers' => array('Content-Type' => 'application/json'),
             'timeout' => 15, 'sslverify' => false
         ));
@@ -350,7 +360,13 @@ class BDC_SMS_Manager {
         if(is_wp_error($response)) {
             wp_send_json_error($response->get_error_message());
         } else {
-            wp_send_json_success("OTP Sent");
+            $body = wp_remote_retrieve_body($response);
+            $data = json_decode($body, true);
+            if (isset($data['success']) && !$data['success']) {
+                wp_send_json_error($data['message']); // Show error (e.g. Insufficient Balance)
+            } else {
+                wp_send_json_success("OTP Sent");
+            }
         }
     }
 
@@ -366,6 +382,7 @@ class BDC_SMS_Manager {
         }
     }
 
+    // ... (VPN Logic remains same) ...
     private function get_user_ip() {
         $ip = '';
         if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
@@ -531,7 +548,12 @@ class BDC_SMS_Manager {
                         });
 
                         function sendOtp(phone) {
-                            $.post("{$admin_ajax}", { action: "bdc_send_otp", phone: phone });
+                            $.post("{$admin_ajax}", { action: "bdc_send_otp", phone: phone })
+                            .fail(function(res){
+                                if(res.responseJSON && res.responseJSON.data) {
+                                    alert("Error: " + res.responseJSON.data);
+                                }
+                            });
                         }
 
                         function verifyOtp() {
@@ -603,6 +625,7 @@ EOD
             }
         }
 
+        // ... (Column logic matches previous) ...
         $screen = get_current_screen();
         $is_order_page = ( 
             ( $hook === 'edit.php' && isset($_GET['post_type']) && $_GET['post_type'] === 'shop_order' ) || 
@@ -721,6 +744,7 @@ EOD
         return ( substr( $base_url, -3 ) === 'api' ) ? $base_url : $base_url . '/api';
     }
 
+    // ... (Remainder of class remains same) ...
     private function get_remote_features( $force_refresh = false ) {
         if ( ! $this->is_license_active(false) ) return [];
         $api_base = $this->get_api_base_url();
@@ -756,56 +780,6 @@ EOD
             'headers' => array('Content-Type' => 'application/json'),
             'timeout' => 5, 'blocking' => false, 'sslverify' => false
         ));
-    }
-
-    public function inject_live_capture_script() {
-        if ( ! is_checkout() || is_order_received_page() ) return;
-        if ( ! $this->is_license_active(false) ) return;
-        $api_base = $this->get_api_base_url();
-        if ( ! $api_base ) return;
-
-        $features = $this->get_remote_features( false );
-        if ( empty($features['live_capture']) || $features['live_capture'] !== true ) return;
-
-        $cart_items = [];
-        if ( WC()->cart ) {
-            foreach ( WC()->cart->get_cart() as $cart_item ) {
-                $product = $cart_item['data'];
-                $cart_items[] = ['product_id' => $cart_item['product_id'], 'name' => $product->get_name(), 'quantity' => $cart_item['quantity'], 'total' => $cart_item['line_total']];
-            }
-        }
-        $cart_total = WC()->cart ? WC()->cart->total : 0;
-        $session_id = WC()->session ? WC()->session->get_customer_id() : uniqid('guest_', true);
-
-        ?>
-        <script type="text/javascript">
-        (function($) {
-            $(document).ready(function() {
-                const apiEndpoint = "<?php echo esc_url($api_base . '/live_capture.php'); ?>";
-                const sessionId = "<?php echo esc_js($session_id); ?>";
-                const cartItems = <?php echo json_encode($cart_items); ?>;
-                const cartTotal = <?php echo esc_js($cart_total); ?>;
-                let debounceTimer;
-
-                function captureData() {
-                    const phone = $('#billing_phone').val();
-                    const name = $('#billing_first_name').val() + ' ' + $('#billing_last_name').val();
-                    const email = $('#billing_email').val();
-                    const address = $('#billing_address_1').val() + ', ' + $('#billing_city').val();
-
-                    if(phone && phone.length > 5) {
-                        $.ajax({
-                            url: apiEndpoint, type: 'POST', contentType: 'application/json',
-                            data: JSON.stringify({ session_id: sessionId, phone: phone, name: name, email: email, address: address, cart_items: cartItems, cart_total: cartTotal }),
-                            success: function(res) {}
-                        });
-                    }
-                }
-                $('form.checkout').on('input', 'input', function() { clearTimeout(debounceTimer); debounceTimer = setTimeout(captureData, 1000); });
-            });
-        })(jQuery);
-        </script>
-        <?php
     }
 
     private function check_connection() {
@@ -844,6 +818,8 @@ EOD
         $numbers = $_POST['numbers'] ?? [];
         $message = $_POST['message'] ?? '';
         $api_base = $this->get_api_base_url();
+        $license_key = get_option('bdc_license_key'); // Get key
+
         if ( !$api_base ) wp_send_json_error( 'Dashboard URL missing.' );
         if ( empty( $numbers ) || empty( $message ) ) wp_send_json_error( 'Inputs empty.' );
         $formatted_numbers = [];
@@ -855,12 +831,27 @@ EOD
         $contacts_csv = implode(',', $formatted_numbers);
         $type = (mb_strlen($message) != strlen($message)) ? 'unicode' : 'text';
         $response = wp_remote_post( $api_base . '/send_sms.php', array(
-            'body' => json_encode(array("contacts" => $contacts_csv, "msg" => $message, "type" => $type)),
+            'body' => json_encode(array(
+                "license_key" => $license_key, // Send Key
+                "contacts" => $contacts_csv, 
+                "msg" => $message, 
+                "type" => $type
+            )),
             'headers' => array('Content-Type' => 'application/json'),
             'timeout' => 25, 'sslverify' => false
         ));
-        if ( is_wp_error( $response ) ) wp_send_json_error( $response->get_error_message() );
-        wp_send_json_success( "Sent successfully." );
+        
+        if ( is_wp_error( $response ) ) {
+            wp_send_json_error( $response->get_error_message() );
+        } else {
+            $body = wp_remote_retrieve_body($response);
+            $data = json_decode($body, true);
+            if (isset($data['success']) && !$data['success']) {
+                wp_send_json_error($data['message']);
+            } else {
+                wp_send_json_success( "Sent successfully." );
+            }
+        }
     }
 
     public function render_dashboard() {

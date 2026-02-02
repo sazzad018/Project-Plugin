@@ -8,7 +8,9 @@ import {
   XCircle, 
   Loader2, 
   Copy, 
-  Globe 
+  Globe,
+  Coins,
+  Minus
 } from 'lucide-react';
 
 interface License {
@@ -16,6 +18,7 @@ interface License {
   domain_name: string;
   license_key: string;
   status: 'active' | 'inactive';
+  sms_balance: number;
   created_at: string;
 }
 
@@ -25,6 +28,10 @@ export const LicenseView: React.FC = () => {
   const [showModal, setShowModal] = useState(false);
   const [newDomain, setNewDomain] = useState('');
   const [creating, setCreating] = useState(false);
+  
+  // Balance Update State
+  const [balanceUpdateId, setBalanceUpdateId] = useState<string | null>(null);
+  const [amountToAdd, setAmountToAdd] = useState('');
 
   const fetchLicenses = async () => {
     setLoading(true);
@@ -84,17 +91,32 @@ export const LicenseView: React.FC = () => {
     });
   };
 
+  const handleUpdateBalance = async (id: string, amount: number) => {
+    try {
+      await fetch('api/licenses.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update_balance', id, amount })
+      });
+      fetchLicenses(); // Refresh to get updated balance
+      setBalanceUpdateId(null);
+      setAmountToAdd('');
+    } catch (e) {
+      alert("Failed to update balance");
+    }
+  };
+
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     alert("License Key Copied!");
   };
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-500 max-w-6xl mx-auto">
+    <div className="space-y-6 animate-in fade-in duration-500 max-w-6xl mx-auto pb-20">
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-2xl font-bold text-gray-800">License Manager</h2>
-          <p className="text-sm text-gray-500">Control which websites can use your premium plugin features.</p>
+          <p className="text-sm text-gray-500">Control websites and distribute SMS credits individually.</p>
         </div>
         <button 
           onClick={() => setShowModal(true)}
@@ -110,6 +132,7 @@ export const LicenseView: React.FC = () => {
             <tr className="bg-gray-50/50 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
               <th className="px-6 py-4">Domain Name</th>
               <th className="px-6 py-4">License Key</th>
+              <th className="px-6 py-4">SMS Balance</th>
               <th className="px-6 py-4 text-center">Status</th>
               <th className="px-6 py-4 text-right">Actions</th>
             </tr>
@@ -124,11 +147,40 @@ export const LicenseView: React.FC = () => {
                   </div>
                 </td>
                 <td className="px-6 py-4">
-                  <div className="flex items-center gap-2 bg-gray-100 px-3 py-1.5 rounded-lg w-fit border border-gray-200">
-                    <code className="text-xs font-mono text-gray-600">{lic.license_key}</code>
-                    <button onClick={() => copyToClipboard(lic.license_key)} className="text-gray-400 hover:text-blue-600">
+                  <div className="flex items-center gap-2 bg-gray-100 px-3 py-1.5 rounded-lg w-fit border border-gray-200 group">
+                    <code className="text-xs font-mono text-gray-600">{lic.license_key.substring(0, 10)}...</code>
+                    <button onClick={() => copyToClipboard(lic.license_key)} className="text-gray-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity">
                       <Copy size={12} />
                     </button>
+                  </div>
+                </td>
+                <td className="px-6 py-4">
+                  <div className="flex items-center gap-3">
+                    <span className={`font-bold ${lic.sms_balance > 0 ? 'text-gray-800' : 'text-red-500'}`}>{lic.sms_balance}</span>
+                    
+                    {balanceUpdateId === lic.id ? (
+                      <div className="flex items-center gap-1 animate-in fade-in zoom-in ml-2">
+                        <input 
+                          type="number" 
+                          placeholder="Qty" 
+                          className="w-16 p-1 border rounded text-xs outline-none" 
+                          autoFocus
+                          value={amountToAdd}
+                          onChange={(e) => setAmountToAdd(e.target.value)}
+                        />
+                        <button onClick={() => handleUpdateBalance(lic.id, parseInt(amountToAdd))} className="bg-green-500 text-white p-1 rounded hover:bg-green-600"><CheckCircle size={14} /></button>
+                        <button onClick={() => setBalanceUpdateId(null)} className="bg-gray-200 text-gray-500 p-1 rounded hover:bg-gray-300"><XCircle size={14} /></button>
+                      </div>
+                    ) : (
+                      <div className="flex gap-1">
+                        <button onClick={() => { setBalanceUpdateId(lic.id); setAmountToAdd(''); }} className="p-1 bg-blue-50 text-blue-600 rounded hover:bg-blue-100 transition-colors" title="Add Credits">
+                          <Plus size={14} />
+                        </button>
+                        <button onClick={() => handleUpdateBalance(lic.id, -10)} className="p-1 bg-red-50 text-red-600 rounded hover:bg-red-100 transition-colors" title="Remove 10 Credits">
+                          <Minus size={14} />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </td>
                 <td className="px-6 py-4 text-center">
@@ -153,7 +205,7 @@ export const LicenseView: React.FC = () => {
             ))}
             {licenses.length === 0 && !loading && (
               <tr>
-                <td colSpan={4} className="px-6 py-12 text-center text-gray-400 italic">No licenses found. Add a website to get started.</td>
+                <td colSpan={5} className="px-6 py-12 text-center text-gray-400 italic">No licenses found. Add a website to get started.</td>
               </tr>
             )}
           </tbody>

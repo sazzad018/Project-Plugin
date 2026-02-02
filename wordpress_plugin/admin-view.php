@@ -484,10 +484,11 @@ jQuery(document).ready(function($) {
         localStorage.setItem('bdc_active_tab', target);
     });
 
-    // Fetch SMS Balance
+    // Fetch SMS Balance (Updated to send License Key)
     <?php if ($is_licensed && isset($api_base) && $api_base): ?>
     $.ajax({
         url: "<?php echo esc_url($api_base . '/manage_sms_balance.php'); ?>",
+        data: { license_key: "<?php echo esc_js($license_key); ?>" }, 
         dataType: 'json',
         success: function(data) {
             if(data.balance !== undefined) {
